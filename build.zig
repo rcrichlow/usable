@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -43,7 +44,7 @@ pub fn build(b: *std.Build) void {
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
             // this package, which is why in this case we don't have to give it a name.
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/linux_platform.zig"),
             // Target and optimization levels must be explicitly wired in when
             // defining an executable or library (in the root module), and you
             // can also hardcode a specific target for an executable or library
@@ -58,10 +59,34 @@ pub fn build(b: *std.Build) void {
                 // repeated because you are allowed to rename your imports, which
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
-//                .{ .name = "usable", .module = mod },
+                //                .{ .name = "usable", .module = mod },
             },
         }),
     });
+
+    exe.linkSystemLibrary("X11");
+    exe.linkLibC();
+
+    const freetype = b.addModule("freetype", .{
+        .root_source_file = b.path("vendor/freetype/src/base/ftbase.c"),
+    });
+    
+    freetype.addIncludePath(b.path("vendor/freetype/include"));
+    
+    freetype.addCSourceFiles(.{
+        .files = &.{
+            "vendor/freetype/src/base/ftsystem.c",
+            "vendor/freetype/src/base/ftmodule.c",
+            "vendor/freetype/src/base/ftinit.c",
+            "vendor/freetype/src/base/ftdebug.c",
+            "vendor/freetype/src/truetype/truetype.c",
+            "vendor/freetype/src/smooth/smooth.c",
+        },
+        .flags = &.{}
+    });
+    
+    exe.root_module.addImport("freetype", freetype);
+    exe.linkSystemLibrary("m");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
