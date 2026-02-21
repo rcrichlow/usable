@@ -64,29 +64,65 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.linkSystemLibrary("X11");
-    exe.linkLibC();
+    exe.root_module.link_libc = true;
+    exe.root_module.linkSystemLibrary("X11", .{});
+    exe.root_module.linkSystemLibrary("Xext", .{});
 
-    const freetype = b.addModule("freetype", .{
-        .root_source_file = b.path("vendor/freetype/src/base/ftbase.c"),
+    // Build FreeType as a static C library
+    const freetype = b.addLibrary(.{
+        .linkage = .static,
+        .name = "freetype",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
-    
-    freetype.addIncludePath(b.path("vendor/freetype/include"));
-    
-    freetype.addCSourceFiles(.{
+
+    // FreeType include paths (our config comes first to override defaults)
+    freetype.root_module.addIncludePath(b.path("src/freetype_config"));
+    freetype.root_module.addIncludePath(b.path("vendor/freetype2/include"));
+
+    const ft_flags = &[_][]const u8{
+        "-DFT2_BUILD_LIBRARY",
+        "-DFT_CONFIG_OPTIONS_H=<ftoption.h>",
+        "-DFT_CONFIG_MODULES_H=<ftmodule.h>",
+    };
+
+    // FreeType amalgamation-style build: each module has one .c that #includes the rest
+    freetype.root_module.addCSourceFiles(.{
         .files = &.{
-            "vendor/freetype/src/base/ftsystem.c",
-            "vendor/freetype/src/base/ftmodule.c",
-            "vendor/freetype/src/base/ftinit.c",
-            "vendor/freetype/src/base/ftdebug.c",
-            "vendor/freetype/src/truetype/truetype.c",
-            "vendor/freetype/src/smooth/smooth.c",
+            // Base library (required)
+            "vendor/freetype2/src/base/ftbase.c",
+            "vendor/freetype2/src/base/ftinit.c",
+            "vendor/freetype2/src/base/ftsystem.c",
+            "vendor/freetype2/src/base/ftdebug.c",
+            "vendor/freetype2/src/base/ftbbox.c",
+            "vendor/freetype2/src/base/ftbitmap.c",
+            "vendor/freetype2/src/base/ftglyph.c",
+            "vendor/freetype2/src/base/ftsynth.c",
+            // TrueType font driver (TTF/OTF support)
+            "vendor/freetype2/src/truetype/truetype.c",
+            // Smooth anti-aliased rasterizer
+            "vendor/freetype2/src/smooth/smooth.c",
+            // SFNT table handling (required for TrueType)
+            "vendor/freetype2/src/sfnt/sfnt.c",
+            // PostScript hinting support
+            "vendor/freetype2/src/psnames/psnames.c",
+            "vendor/freetype2/src/pshinter/pshinter.c",
+            // CFF/OpenType font driver
+            "vendor/freetype2/src/cff/cff.c",
+            // PostScript auxiliary support
+            "vendor/freetype2/src/psaux/psaux.c",
         },
-        .flags = &.{}
+        .flags = ft_flags,
     });
-    
-    exe.root_module.addImport("freetype", freetype);
-    exe.linkSystemLibrary("m");
+
+    // Link FreeType into the executable
+    exe.linkLibrary(freetype);
+
+    // Expose FreeType headers to our Zig code for @cImport
+    exe.addIncludePath(b.path("vendor/freetype2/include"));
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
