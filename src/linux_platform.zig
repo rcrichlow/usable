@@ -258,11 +258,21 @@ pub fn main() !void {
     const gc = c.XCreateGC(display, window, 0, null);
     defer _ = c.XFreeGC(display, gc);
 
+    // Get URL from command line args, fallback to example.com
+    var initial_url: []const u8 = "http://example.com";
+    if (std.process.argsAlloc(std.heap.page_allocator)) |args| {
+        defer std.process.argsFree(std.heap.page_allocator, args);
+        if (args.len > 1) {
+            initial_url = args[1];
+        }
+    } else |_| {
+        std.debug.print("Failed to parse args, using default URL\n", .{});
+    }
+
     var backbuffer: X11Backbuffer = undefined;
     backbuffer.init(display, visual, depth, 800, 600);
     defer backbuffer.destroy();
 
-    var app_memory: app.AppMemory = undefined;
     const persistent_storage_size = 32 * 1024 * 1024;
     const transient_storage_size = 64 * 1024 * 1024;
     const total_size = persistent_storage_size + transient_storage_size;
@@ -270,8 +280,26 @@ pub fn main() !void {
     defer std.heap.page_allocator.free(memory_block);
     const all_bytes = memory_block[0..total_size];
 
-    app_memory.persistent_storage = all_bytes[0..persistent_storage_size];
-    app_memory.transient_storage = all_bytes[persistent_storage_size..];
+    const persistent = all_bytes[0..persistent_storage_size];
+    const transient = all_bytes[persistent_storage_size..];
+
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(persistent);
+    const arena = std.heap.ArenaAllocator.init(fixed_buffer.allocator());
+
+    var app_memory: app.AppMemory = .{
+        .ft_library = undefined,
+        .ft_face = undefined,
+        .ft_is_initialized = false,
+        .browser_state = .Idle,
+        .current_url = &.{},
+        .response_body = &.{},
+        .error_message = &.{},
+        .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, // white
+        .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .arena = arena,
+        .persistent_storage = persistent,
+        .transient_storage = transient,
+    };
 
     if (backbuffer.buffers[0].using_shm) {
         std.debug.print("Platform: using MIT-SHM double-buffered backbuffer\n", .{});
@@ -292,10 +320,8 @@ pub fn main() !void {
                 c.KeyPress => {
                     const keycode = event.xkey.keycode;
                     std.debug.print("Key pressed: {d}\n", .{keycode});
-                    if (keycode == 36) { // Enter key
-                        app.start() catch |err| {
-                            std.debug.print("Application error: {any}\n", .{err});
-                        };
+                    if (keycode == 71) { // F5 key
+                        app.navigate(&app_memory, initial_url);
                     }
                     if (keycode == 9) { // Escape key
                         running = false;
@@ -305,6 +331,7 @@ pub fn main() !void {
                     const width = event.xconfigure.width;
                     const height = event.xconfigure.height;
                     std.debug.print("Window resized: {d}x{d}\n", .{ width, height });
+                    backbuffer.resize(width, height);
                 },
                 else => {},
             }
@@ -322,6 +349,5 @@ pub fn main() !void {
         app.updateAndRender(&app_memory, &buffer);
         backbuffer.blitAndSwap(window, gc);
         _ = c.XFlush(display);
-
     }
 }

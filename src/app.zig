@@ -5,18 +5,35 @@ const c = @cImport({
     @cInclude("freetype2/freetype/ftlcdfil.h");
 });
 
-var global_ft_library: c.FT_Library = undefined;
-var ft_face: c.FT_Face = undefined;
-var ft_initialized = false;
+pub const BrowserState = enum {
+    Idle,
+    Loading,
+    Loaded,
+    Error,
+};
 
-// trying not to overthink this at the moment.
-// should probably switch to an allocator-based approach at some point, 
-// but for now just hardcode some fixed-size buffers.
+// TODO: revisit this. this is likely not the ideal approach to managing 
+// memory/state for the app, but it's a start. we can iterate on this as we go
 pub const AppMemory = struct {
+    ft_library: c.FT_Library,
+    ft_face: c.FT_Face,
     ft_is_initialized: bool,
 
-    // a chunk of memory for things that should persist 
-    // across frames (e.g. font atlas, cached glyph bitmaps, etc)
+    // Browser state
+    browser_state: BrowserState,
+    current_url: []u8,
+    response_body: []u8,
+    error_message: []u8,
+
+    // Render settings (will be handled by CSS, and probably some other struct in the future)
+    background_color: Color,
+    text_color: Color,
+
+    // Arena allocator for page content
+    arena: std.heap.ArenaAllocator,
+
+    // a chunk of memory for things that should persist
+    // across frames (e.g. page content, cached glyph bitmaps, etc)
     persistent_storage: []u8,
     transient_storage: []u8,
 };
@@ -88,7 +105,7 @@ pub const OffscreenBuffer = struct {
                 const r_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 0])) / 255.0;
                 const g_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 1])) / 255.0;
                 const b_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 2])) / 255.0;
-                
+
                 const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
                 dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * r_coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - r_coverage));
                 dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * g_coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - g_coverage));
@@ -101,35 +118,110 @@ pub const OffscreenBuffer = struct {
 pub fn init(memory: *AppMemory) !void {
     std.debug.print("Initializing FreeType...\n", .{});
 
-    if (c.FT_Init_FreeType(&global_ft_library) != 0) {
+    var library: c.FT_Library = undefined;
+    var face: c.FT_Face = undefined;
+
+    if (c.FT_Init_FreeType(&library) != 0) {
         std.debug.print("Failed to initialize FreeType\n", .{});
         return error.FreeTypeInitFailed;
     }
 
-    if (c.FT_New_Face(global_ft_library, "/usr/share/fonts/noto/NotoSans-Regular.ttf", 0, &ft_face) != 0) {
+    memory.ft_library = library;
+
+    if (c.FT_New_Face(memory.ft_library.?, "/usr/share/fonts/noto/NotoSans-Regular.ttf", 0, &face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
         return error.FontLoadFailed;
     }
 
-    if (c.FT_Library_SetLcdFilter(global_ft_library, c.FT_LCD_FILTER_DEFAULT) != 0) {
+    memory.ft_face = face;
+
+    if (c.FT_Library_SetLcdFilter(memory.ft_library.?, c.FT_LCD_FILTER_DEFAULT) != 0) {
         std.debug.print("Failed to set LCD filter\n", .{});
         return error.LcdFilterFailed;
     }
 
-    if (c.FT_Set_Char_Size(ft_face, 0, 16 * 64, 0, 0) != 0) {
+    if (c.FT_Set_Char_Size(memory.ft_face.?, 0, 16 * 64, 0, 0) != 0) {
         std.debug.print("Failed to set char size\n", .{});
         return error.FontSizeFailed;
     }
 
-    std.debug.print("family name: {s}\n", .{ft_face.*.family_name});
+    std.debug.print("family name: {s}\n", .{memory.ft_face.?.*.family_name});
 
     memory.ft_is_initialized = true;
 }
 
-pub fn start() !void {
-    fetchUrl("http://example.com") catch |err| {
-        std.debug.print("Failed to fetch URL: {any}\n", .{err});
+/// Start navigating to a URL. Sets state to Loading and begins the fetch.
+/// The actual fetch happens synchronously for now - will make async later.
+pub fn navigate(memory: *AppMemory, url: []const u8) void {
+    // Reset arena to free all previous allocations
+    _ = memory.arena.reset(.retain_capacity);
+
+    // Copy URL into our arena memory
+    const url_copy = memory.arena.allocator().dupe(u8, url) catch {
+        memory.browser_state = .Error;
+        memory.error_message = memory.arena.allocator().dupe(u8, "Out of memory") catch &.{};
+        return;
     };
+
+    memory.current_url = url_copy;
+    memory.browser_state = .Loading;
+    memory.error_message = &.{};
+
+    const response_body = fetchUrl(&memory.arena, url) catch |err| {
+        memory.browser_state = .Error;
+        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to fetch URL") catch &.{};
+        std.debug.print("Fetch error: {any}\n", .{err});
+        return;
+    };
+
+    // For now, just mark as loaded after successful fetch
+    // In the future, this is where we'd parse HTML
+    memory.browser_state = .Loaded;
+    memory.response_body = response_body;
+    tokenizeHtml(response_body);
+}
+
+/// Draw text at the given position using the loaded font
+fn drawText(memory: *AppMemory, buffer: *OffscreenBuffer, text: []const u8, x: i32, y: i32) void {
+    const slot: c.FT_GlyphSlot = memory.ft_face.*.glyph;
+    var draw_x = x;
+    for (text) |char| {
+        const char_index = c.FT_Get_Char_Index(memory.ft_face.?, char);
+        if (c.FT_Load_Glyph(memory.ft_face.?, char_index, c.FT_LOAD_DEFAULT) != 0) {
+            continue;
+        }
+
+        if (c.FT_Render_Glyph(slot, c.FT_RENDER_MODE_LCD) != 0) {
+            continue;
+        }
+
+        buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, y - slot.*.bitmap_top, memory.text_color);
+        draw_x += @intCast(slot.*.advance.x >> 6);
+    }
+}
+
+/// Render the current browser state to the buffer
+fn render(memory: *AppMemory, buffer: *OffscreenBuffer) void {
+    buffer.clear(memory.background_color);
+
+    switch (memory.browser_state) {
+        .Idle => {
+            // Draw URL bar or instructions
+            drawText(memory, buffer, "Press F5 to load example.com", 10, 30);
+        },
+        .Loading => {
+            drawText(memory, buffer, "Loading...", 10, 30);
+        },
+        .Loaded => {
+            drawText(memory, buffer, memory.current_url, 10, 30);
+            // TODO: Render parsed HTML
+            drawText(memory, buffer, memory.response_body, 10, 60);
+        },
+        .Error => {
+            drawText(memory, buffer, "Error:", 10, 30);
+            drawText(memory, buffer, memory.error_message, 10, 60);
+        },
+    }
 }
 
 pub fn updateAndRender(memory: *AppMemory, buffer: *OffscreenBuffer) void {
@@ -138,33 +230,18 @@ pub fn updateAndRender(memory: *AppMemory, buffer: *OffscreenBuffer) void {
             std.debug.print("FreeType initialization error: {any}\n", .{err});
             return;
         };
+        memory.browser_state = .Idle;
     }
 
-    const slot: c.FT_GlyphSlot = ft_face.*.glyph;
-    var draw_x: i32 = 10;
-    const text = "Hello, FreeType!";
-    for (text) |char| {
-        const char_index = c.FT_Get_Char_Index(ft_face, char);
-        if (c.FT_Load_Glyph(ft_face, char_index, c.FT_LOAD_DEFAULT) != 0) {
-            std.debug.print("Failed to load glyph for '{c}'\n", .{char});
-            continue;
-        }
-
-        if (c.FT_Render_Glyph(slot, c.FT_RENDER_MODE_LCD) != 0) {
-            std.debug.print("Failed to render glyph for '{c}'\n", .{char});
-            continue;
-        }
-
-        buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, 50 - slot.*.bitmap_top, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
-        draw_x += @intCast(slot.*.advance.x >> 6);
-    }
+    render(memory, buffer);
 }
 
-fn fetchUrl(url: []const u8) !void {
-    const allocator = std.heap.page_allocator;
-    var client = std.http.Client{ .allocator = allocator };
+fn fetchUrl(arena: *std.heap.ArenaAllocator, url: []const u8) ![]u8 {
+    const http_allocator = std.heap.page_allocator;
+    var client = std.http.Client{ .allocator = http_allocator };
     defer client.deinit();
 
+    const allocator = arena.allocator();
     var body_list: std.ArrayListUnmanaged(u8) = .empty;
     defer body_list.deinit(allocator);
     var body_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &body_list);
@@ -179,6 +256,69 @@ fn fetchUrl(url: []const u8) !void {
 
     std.debug.print("Status: {d}\n", .{result.status});
     const body = try body_writer.toOwnedSlice();
-    defer allocator.free(body);
     std.debug.print("Body: {s}\n", .{body});
+
+    return body;
+}
+
+fn tokenizeHtml(html: []const u8) void {
+    var i: usize = 0;
+    while (i < html.len) {
+        const char = html[i];
+        if (char == '<') {
+            var tag_start = i + 1;
+            var is_end_tag = false;
+            var is_self_closing = false;
+            var is_comment_tag = false;
+            var is_doctype_tag = false;
+
+            if (html[tag_start] == '/') {
+                tag_start += 1;
+                is_end_tag = true;
+            } else if (html[tag_start] == '!' and html.len > tag_start + 3 and html[tag_start + 1] == '-' and html[tag_start + 2] == '-') {
+                is_comment_tag = true;
+                tag_start += 3;
+            } else if (html[tag_start] == '!' and html.len > tag_start + 8 and std.mem.startsWith(u8, html[tag_start..], "!doctype")) {
+                is_doctype_tag = true;
+                tag_start += 8;
+            }
+
+            while (i < html.len and html[i] != '>') {
+                i += 1;
+            }
+
+
+            var tag_end = i;
+            if (i - 1 == '/') {
+                tag_end -= 1;
+                is_self_closing = true;
+            }
+
+            if (tag_end < html.len) {
+                const tag_name = html[tag_start..tag_end];
+                if (is_end_tag) {
+                    std.debug.print("End Tag: {s}\n", .{tag_name});
+                } else if (is_self_closing) {
+                    std.debug.print("Self-closing Tag: {s}\n", .{tag_name});
+                } else if (is_comment_tag) {
+                    std.debug.print("Comment Text: {s}\n", .{tag_name});
+                } else if (is_doctype_tag) {
+                    std.debug.print("DOCTYPE: {s}\n", .{tag_name});
+                } else {
+                    std.debug.print("Opening Tag: {s}\n", .{tag_name});
+                }
+            }
+        } else {
+            // Text content
+            const text_start = i;
+            while (i < html.len and html[i] != '<') {
+                i += 1;
+            }
+            const text_end = i;
+            if (text_end > text_start) {
+                const text_content = html[text_start + 1..text_end];
+                std.debug.print("Text: {s}\n", .{text_content});
+            }
+        }
+    }
 }
