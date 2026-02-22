@@ -1,8 +1,8 @@
 const std = @import("std");
 const c = @cImport({
-    @cInclude("freetype2/ft2build.h");
-    @cInclude("freetype2/freetype/freetype.h");
-    @cInclude("freetype2/freetype/ftlcdfil.h");
+    @cInclude("ft2build.h");
+    @cInclude("freetype/freetype.h");
+    @cInclude("freetype/ftlcdfil.h");
 });
 
 var global_ft_library: c.FT_Library = undefined;
@@ -10,12 +10,12 @@ var ft_face: c.FT_Face = undefined;
 var ft_initialized = false;
 
 // trying not to overthink this at the moment.
-// should probably switch to an allocator-based approach at some point, 
+// should probably switch to an allocator-based approach at some point,
 // but for now just hardcode some fixed-size buffers.
 pub const AppMemory = struct {
     ft_is_initialized: bool,
 
-    // a chunk of memory for things that should persist 
+    // a chunk of memory for things that should persist
     // across frames (e.g. font atlas, cached glyph bitmaps, etc)
     persistent_storage: []u8,
     transient_storage: []u8,
@@ -88,7 +88,7 @@ pub const OffscreenBuffer = struct {
                 const r_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 0])) / 255.0;
                 const g_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 1])) / 255.0;
                 const b_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 2])) / 255.0;
-                
+
                 const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
                 dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * r_coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - r_coverage));
                 dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * g_coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - g_coverage));
@@ -106,7 +106,13 @@ pub fn init(memory: *AppMemory) !void {
         return error.FreeTypeInitFailed;
     }
 
-    if (c.FT_New_Face(global_ft_library, "/usr/share/fonts/noto/NotoSans-Regular.ttf", 0, &ft_face) != 0) {
+    const font_path = switch (@import("builtin").target.os.tag) {
+        .windows => "C:\\Windows\\Fonts\\arial.ttf",
+        else => "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    };
+    std.debug.print("Loading font: {s}\n", .{font_path});
+
+    if (c.FT_New_Face(global_ft_library, font_path, 0, &ft_face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
         return error.FontLoadFailed;
     }
@@ -140,10 +146,12 @@ pub fn updateAndRender(memory: *AppMemory, buffer: *OffscreenBuffer) void {
         };
     }
 
+    // Clear to black
+    buffer.clear(.{ .r = 0, .g = 0, .b = 0, .a = 255 });
+
     const slot: c.FT_GlyphSlot = ft_face.*.glyph;
     var draw_x: i32 = 10;
-    const text = "Hello, FreeType!";
-    for (text) |char| {
+    for ("Hello, FreeType!") |char| {
         const char_index = c.FT_Get_Char_Index(ft_face, char);
         if (c.FT_Load_Glyph(ft_face, char_index, c.FT_LOAD_DEFAULT) != 0) {
             std.debug.print("Failed to load glyph for '{c}'\n", .{char});
@@ -155,7 +163,9 @@ pub fn updateAndRender(memory: *AppMemory, buffer: *OffscreenBuffer) void {
             continue;
         }
 
-        buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, 50 - slot.*.bitmap_top, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
+        const bitmap = &slot.*.bitmap;
+
+        buffer.drawFTBitmap(bitmap, draw_x + slot.*.bitmap_left, 50 - slot.*.bitmap_top, .{ .r = 255, .g = 255, .b = 0, .a = 255 });
         draw_x += @intCast(slot.*.advance.x >> 6);
     }
 }
