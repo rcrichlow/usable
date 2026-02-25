@@ -1,4 +1,5 @@
 const std = @import("std");
+const dom = @import("dom.zig");
 const c = @cImport({
     @cInclude("freetype2/ft2build.h");
     @cInclude("freetype2/freetype/freetype.h");
@@ -178,7 +179,12 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
     // In the future, this is where we'd parse HTML
     memory.browser_state = .Loaded;
     memory.response_body = response_body;
-    tokenizeHtml(response_body);
+    //tokenizeHtml(response_body);
+    var DOM = dom.DOM.init(memory.arena.allocator());
+    DOM.parse(response_body) catch |err| {
+        std.debug.print("Parse error: {any}\n", .{err});
+        return;
+    };
 }
 
 /// Draw text at the given position using the loaded font
@@ -286,7 +292,6 @@ fn tokenizeHtml(html: []const u8) void {
             while (i < html.len and html[i] != '>') {
                 i += 1;
             }
-
 
             var tag_end = i;
             if (i - 1 == '/') {
