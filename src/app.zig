@@ -25,6 +25,7 @@ pub const AppMemory = struct {
     current_url: []u8,
     response_body: []u8,
     error_message: []u8,
+    dom_tree: ?dom.Node,
 
     // Render settings (will be handled by CSS, and probably some other struct in the future)
     background_color: Color,
@@ -177,7 +178,6 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
 
     // For now, just mark as loaded after successful fetch
     // In the future, this is where we'd parse HTML
-    memory.browser_state = .Loaded;
     memory.response_body = response_body;
     //tokenizeHtml(response_body);
     var DOM = dom.DOM.init(memory.arena.allocator());
@@ -185,6 +185,10 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
         std.debug.print("Parse error: {any}\n", .{err});
         return;
     };
+
+    memory.dom_tree = DOM.root;
+
+    memory.browser_state = .Loaded;
 }
 
 /// Draw text at the given position using the loaded font
@@ -221,11 +225,26 @@ fn render(memory: *AppMemory, buffer: *OffscreenBuffer) void {
         .Loaded => {
             drawText(memory, buffer, memory.current_url, 10, 30);
             // TODO: Render parsed HTML
-            drawText(memory, buffer, memory.response_body, 10, 60);
+            var y: i32 = 50;
+            renderNode(memory, buffer, memory.dom_tree.?, 10, &y);
         },
         .Error => {
             drawText(memory, buffer, "Error:", 10, 30);
             drawText(memory, buffer, memory.error_message, 10, 60);
+        },
+    }
+}
+
+fn renderNode(memory: *AppMemory, buffer: *OffscreenBuffer, node: dom.Node, x: i32, y: *i32) void {
+    switch (node) {
+        .Element => |el| {
+            for (el.children.items) |child| renderNode(memory, buffer, child, x, y);
+        },
+        .Text => |tx| {
+            if (tx.content.len > 0) {
+                drawText(memory, buffer, tx.content, x, y.*);
+                y.* += 30;
+            }
         },
     }
 }

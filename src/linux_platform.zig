@@ -294,6 +294,7 @@ pub fn main() !void {
         .current_url = &.{},
         .response_body = &.{},
         .error_message = &.{},
+        .dom_tree = undefined,
         .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, // white
         .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
         .arena = arena,
