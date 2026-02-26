@@ -44,7 +44,10 @@ pub fn build(b: *std.Build) void {
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
             // this package, which is why in this case we don't have to give it a name.
-            .root_source_file = b.path("src/linux_platform.zig"),
+            .root_source_file = b.path(switch (target.result.os.tag) {
+                .windows => "src/win32_platform.zig",
+                else => "src/linux_platform.zig",
+            }),
             // Target and optimization levels must be explicitly wired in when
             // defining an executable or library (in the root module), and you
             // can also hardcode a specific target for an executable or library
@@ -65,8 +68,19 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.link_libc = true;
-    exe.root_module.linkSystemLibrary("X11", .{});
-    exe.root_module.linkSystemLibrary("Xext", .{});
+
+    // Link platform-specific libraries
+    switch (target.result.os.tag) {
+        .windows => {
+            // Win32: GDI for rendering
+            exe.root_module.linkSystemLibrary("gdi32", .{});
+        },
+        else => {
+            // Linux: X11 libraries
+            exe.root_module.linkSystemLibrary("X11", .{});
+            exe.root_module.linkSystemLibrary("Xext", .{});
+        },
+    }
 
     // Build FreeType as a static C library
     const freetype = b.addLibrary(.{

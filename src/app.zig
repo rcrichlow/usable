@@ -1,9 +1,9 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const c = @cImport({
-    @cInclude("freetype2/ft2build.h");
-    @cInclude("freetype2/freetype/freetype.h");
-    @cInclude("freetype2/freetype/ftlcdfil.h");
+    @cInclude("ft2build.h");
+    @cInclude("freetype/freetype.h");
+    @cInclude("freetype/ftlcdfil.h");
 });
 
 pub const BrowserState = enum {
@@ -130,7 +130,13 @@ pub fn init(memory: *AppMemory) !void {
 
     memory.ft_library = library;
 
-    if (c.FT_New_Face(memory.ft_library.?, "/usr/share/fonts/noto/NotoSans-Regular.ttf", 0, &face) != 0) {
+    const font_path = switch (@import("builtin").target.os.tag) {
+        .windows => "C:\\Windows\\Fonts\\arial.ttf",
+        else => "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    };
+    std.debug.print("Loading font: {s}\n", .{font_path});
+
+    if (c.FT_New_Face(memory.ft_library.?, font_path, 0, &ft_face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
         return error.FontLoadFailed;
     }
