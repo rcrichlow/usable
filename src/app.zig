@@ -52,7 +52,7 @@ pub const Color = packed struct {
     }
 };
 
-/// Software framebuffer the platform allocates and the game draws into.
+/// Software framebuffer the platform allocates and the app draws into.
 pub const OffscreenBuffer = struct {
     memory: [*]u8,
     width: i32,
@@ -182,10 +182,7 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
         return;
     };
 
-    // For now, just mark as loaded after successful fetch
-    // In the future, this is where we'd parse HTML
     memory.response_body = response_body;
-    //tokenizeHtml(response_body);
     var DOM = dom.DOM.init(memory.arena.allocator());
     DOM.parse(response_body) catch |err| {
         std.debug.print("Parse error: {any}\n", .{err});
@@ -193,7 +190,6 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
     };
 
     memory.dom_tree = DOM.root;
-
     memory.browser_state = .Loaded;
 }
 
@@ -290,65 +286,4 @@ fn fetchUrl(arena: *std.heap.ArenaAllocator, url: []const u8) ![]u8 {
     std.debug.print("Body: {s}\n", .{body});
 
     return body;
-}
-
-fn tokenizeHtml(html: []const u8) void {
-    var i: usize = 0;
-    while (i < html.len) {
-        const char = html[i];
-        if (char == '<') {
-            var tag_start = i + 1;
-            var is_end_tag = false;
-            var is_self_closing = false;
-            var is_comment_tag = false;
-            var is_doctype_tag = false;
-
-            if (html[tag_start] == '/') {
-                tag_start += 1;
-                is_end_tag = true;
-            } else if (html[tag_start] == '!' and html.len > tag_start + 3 and html[tag_start + 1] == '-' and html[tag_start + 2] == '-') {
-                is_comment_tag = true;
-                tag_start += 3;
-            } else if (html[tag_start] == '!' and html.len > tag_start + 8 and std.mem.startsWith(u8, html[tag_start..], "!doctype")) {
-                is_doctype_tag = true;
-                tag_start += 8;
-            }
-
-            while (i < html.len and html[i] != '>') {
-                i += 1;
-            }
-
-            var tag_end = i;
-            if (i - 1 == '/') {
-                tag_end -= 1;
-                is_self_closing = true;
-            }
-
-            if (tag_end < html.len) {
-                const tag_name = html[tag_start..tag_end];
-                if (is_end_tag) {
-                    std.debug.print("End Tag: {s}\n", .{tag_name});
-                } else if (is_self_closing) {
-                    std.debug.print("Self-closing Tag: {s}\n", .{tag_name});
-                } else if (is_comment_tag) {
-                    std.debug.print("Comment Text: {s}\n", .{tag_name});
-                } else if (is_doctype_tag) {
-                    std.debug.print("DOCTYPE: {s}\n", .{tag_name});
-                } else {
-                    std.debug.print("Opening Tag: {s}\n", .{tag_name});
-                }
-            }
-        } else {
-            // Text content
-            const text_start = i;
-            while (i < html.len and html[i] != '<') {
-                i += 1;
-            }
-            const text_end = i;
-            if (text_end > text_start) {
-                const text_content = html[text_start + 1..text_end];
-                std.debug.print("Text: {s}\n", .{text_content});
-            }
-        }
-    }
 }
