@@ -136,7 +136,7 @@ pub fn init(memory: *AppMemory) !void {
     };
     std.debug.print("Loading font: {s}\n", .{font_path});
 
-    if (c.FT_New_Face(memory.ft_library.?, font_path, 0, &ft_face) != 0) {
+    if (c.FT_New_Face(memory.ft_library.?, font_path, 0, &face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
         return error.FontLoadFailed;
     }
