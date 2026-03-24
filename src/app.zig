@@ -161,29 +161,15 @@ fn render(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
             drawText(memory, buffer, "Loading...", 10, 30);
         },
         .Loaded => {
+            // temporary address bar
             drawText(memory, buffer, memory.current_url, 10, 10);
-            // TODO: Render parsed HTML
-            //var y: i32 = 50;
-            //renderNode(memory, buffer, memory.dom_tree.?, 10, &y);
+
+            // the actual DOM layout tree
             paint(memory, buffer, memory.layout_tree.?);
         },
         .Error => {
             drawText(memory, buffer, "Error:", 10, 30);
             drawText(memory, buffer, memory.error_message, 10, 60);
-        },
-    }
-}
-
-fn renderNode(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, node: types.Node, x: i32, y: *i32) void {
-    switch (node) {
-        .Element => |el| {
-            for (el.children.items) |child| renderNode(memory, buffer, child, x, y);
-        },
-        .Text => |tx| {
-            if (tx.content.len > 0) {
-                drawText(memory, buffer, tx.content, x, y.*);
-                y.* += 30;
-            }
         },
     }
 }

@@ -232,9 +232,14 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
         },
         .Inline => {
             if (layout_box.node.? == .Text) {
+                layout_box.dimensions.content.x = containing_block.content.x;
+                layout_box.dimensions.content.y = containing_block.content.y;
+
                 const txt = layout_box.node.?.Text;
                 const words = parseWords(txt.content, memory.arena.allocator());
                 if (words.len == 0) {
+                    layout_box.dimensions.content.height = 0;
+                    layout_box.dimensions.content.width = 0;
                     return;
                 }
 
@@ -243,35 +248,37 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                     return;
                 };
 
-                std.debug.print("content: '{s}'\n", .{txt.content});
-                var cursor_x: f32 = containing_block.content.x;
+                //std.debug.print("content: '{s}'\n", .{txt.content});
+                var cursor_x: f32 = 0;
                 var line_y: f32 = containing_block.content.y;
                 var line_height: f32 = 0;
                 var widest_line: f32 = 0;
                 var height: f32 = 0;
+                const space_width = measureText(memory.ft_face, " ").width;
 
-                layout_box.dimensions.content.x = cursor_x;
-                layout_box.dimensions.content.y = line_y;
-                std.debug.print("containing block dims: {any}\n", .{containing_block.content});
+                //std.debug.print("containing block dims: {any}\n", .{containing_block.content});
                 for (words) |word| {
                     var fragment: types.TextFragment = undefined;
 
+                    // add a space if this isn't the first word
+                    if (cursor_x != containing_block.content.x) {
+                        cursor_x += space_width;
+                    }
+
                     const dims = measureText(memory.ft_face, word);
+
                     if (cursor_x + dims.width > containing_block.content.width) {
-                        cursor_x = containing_block.content.x;
+                        cursor_x = 0;
                         line_y += line_height;
                         height += line_height;
                         line_height = dims.height;
                     } else {
                         line_height = @max(line_height, dims.height);
-                        if (cursor_x != containing_block.content.x) {
-                            cursor_x += measureText(memory.ft_face, " ").width;
-                        }
                     }
 
                     fragment = .{
                         .content = word,
-                        .x = cursor_x,
+                        .x = containing_block.content.x + cursor_x,
                         .y = line_y,
                         .width = dims.width,
                         .ascent = dims.ascent,
@@ -281,16 +288,13 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                     cursor_x += dims.width;
                     widest_line = @max(widest_line, cursor_x);
 
-                    std.debug.print("word: '{s}'\n", .{word});
-                    std.debug.print("fragment: '{any}'\n", .{fragment});
+                    //std.debug.print("word: '{s}'\n", .{word});
+                    //std.debug.print("fragment: '{any}'\n", .{fragment});
 
                     layout_box.fragments.?.append(memory.arena.allocator(), fragment) catch |err| {
                         std.debug.print("error adding fragment: {any}\n", .{err});
                     };
                 }
-
-                //const box = measureText(memory.ft_face, layout_box.node.?.Text.content);
-                //std.debug.print("box dimensions: {any}\n", .{box});
 
                 layout_box.dimensions.content.height = height + line_height;
                 layout_box.dimensions.content.width = widest_line;
