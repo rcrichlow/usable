@@ -171,8 +171,9 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
     return layout_box;
 }
 
-// generate fragments from text. tokenize words on whitespace.
-// TODO: there is probably a more efficient way to do this, eg. ranges or a tokenzer or something - rcrichlow 3/23/26
+/// Tokenize text into words, ignoring whitespace and newlines.
+// TODO: there is probably a more efficient way to do this, eg. ranges or an actual 
+// tokenzer or something - rcrichlow 3/23/26
 fn parseWords(text: []const u8, allocator: std.mem.Allocator) []const []const u8 {
     var words = std.ArrayList([]const u8).initCapacity(allocator, 4) catch |err| {
         std.debug.print("error allocating words: {any}\n", .{err});
@@ -334,19 +335,6 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
         },
     }
 }
-
-//fn generateFragment(face: ft.FT_Face, text: []const u8) types.TextFragment {
-//    const dims = measureText(face, text);
-//
-//    return .{
-//        .content = text,
-//        .x = 0,
-//        .y = 0,
-//        .width = dims.width,
-//        .ascent = dims.ascent,
-//        .descent = dims.descent,
-//    };
-//}
 
 const LineBox = struct {
     width: f32,
