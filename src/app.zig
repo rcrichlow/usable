@@ -1,129 +1,17 @@
 const std = @import("std");
 const dom = @import("dom.zig");
-const c = @cImport({
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-    @cInclude("freetype/ftlcdfil.h");
-});
+const layout = @import("layout.zig");
+const types = @import("types.zig");
+const c = @import("c_imports.zig");
+const ft = c.ft;
 
-pub const BrowserState = enum {
-    Idle,
-    Loading,
-    Loaded,
-    Error,
-};
-
-// TODO: revisit this. this is likely not the ideal approach to managing 
-// memory/state for the app, but it's a start. we can iterate on this as we go
-pub const AppMemory = struct {
-    ft_library: c.FT_Library,
-    ft_face: c.FT_Face,
-    ft_is_initialized: bool,
-
-    // Browser state
-    browser_state: BrowserState,
-    current_url: []u8,
-    response_body: []u8,
-    error_message: []u8,
-    dom_tree: ?dom.Node,
-
-    // Render settings (will be handled by CSS, and probably some other struct in the future)
-    background_color: Color,
-    text_color: Color,
-
-    // Arena allocator for page content
-    arena: std.heap.ArenaAllocator,
-
-    // a chunk of memory for things that should persist
-    // across frames (e.g. page content, cached glyph bitmaps, etc)
-    persistent_storage: []u8,
-    transient_storage: []u8,
-};
-
-/// BGRA8 pixel layout matching X11 ZPixmap 32-bit visual (little-endian).
-pub const Color = packed struct {
-    b: u8,
-    g: u8,
-    r: u8,
-    a: u8,
-
-    pub fn rgb(r: u8, g: u8, b: u8) Color {
-        return .{ .r = r, .g = g, .b = b, .a = 0xFF };
-    }
-};
-
-/// Software framebuffer the platform allocates and the app draws into.
-pub const OffscreenBuffer = struct {
-    memory: [*]u8,
-    width: i32,
-    height: i32,
-    pitch: i32,
-    bytes_per_pixel: i32,
-
-    pub fn clear(self: *OffscreenBuffer, color: Color) void {
-        const pixel: u32 = @bitCast(color);
-        const w: usize = @intCast(self.width);
-        const h: usize = @intCast(self.height);
-        const pitch: usize = @intCast(self.pitch);
-
-        for (0..h) |y| {
-            const row: [*]u32 = @ptrCast(@alignCast(self.memory + y * pitch));
-            @memset(row[0..w], pixel);
-        }
-    }
-
-    /// Draw a FreeType bitmap into the buffer
-    pub fn drawFTBitmap(
-        self: *OffscreenBuffer,
-        bitmap: *const c.FT_Bitmap,
-        x: i32,
-        y: i32,
-        color: Color,
-    ) void {
-        const bm_width: i32 = @intCast(bitmap.width / 3);
-        const bm_rows: i32 = @intCast(bitmap.rows);
-        const bm_pitch: i32 = bitmap.pitch;
-
-        const bm_buffer: [*]const u8 = bitmap.buffer orelse return;
-
-        const start_x: i32 = @max(0, -x);
-        const start_y: i32 = @max(0, -y);
-        const end_x: i32 = @min(bm_width, self.width - x);
-        const end_y: i32 = @min(bm_rows, self.height - y);
-
-        if (start_x >= end_x or start_y >= end_y) return;
-
-        for (@as(usize, @intCast(start_y))..@as(usize, @intCast(end_y))) |bm_row| {
-            const row_i: i32 = @intCast(bm_row);
-            const dest_y = y + row_i;
-
-            const src_row_offset: i32 = if (bm_pitch > 0) row_i * bm_pitch else (bm_rows - 1 - row_i) * bm_pitch;
-            const src_row: [*]const u8 = bm_buffer + @as(usize, @intCast(src_row_offset));
-
-            const dest_row: [*]Color = @ptrCast(@alignCast(self.memory + @as(usize, @intCast(dest_y * self.pitch))));
-
-            for (@as(usize, @intCast(start_x))..@as(usize, @intCast(end_x))) |bm_col| {
-                const dest_x = x + @as(i32, @intCast(bm_col));
-                const r_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 0])) / 255.0;
-                const g_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 1])) / 255.0;
-                const b_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 2])) / 255.0;
-
-                const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
-                dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * r_coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - r_coverage));
-                dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * g_coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - g_coverage));
-                dest_pixel.b = @intFromFloat(@as(f32, @floatFromInt(color.b)) * b_coverage + @as(f32, @floatFromInt(dest_pixel.b)) * (1.0 - b_coverage));
-            }
-        }
-    }
-};
-
-pub fn init(memory: *AppMemory) !void {
+pub fn init(memory: *types.AppMemory) !void {
     std.debug.print("Initializing FreeType...\n", .{});
 
-    var library: c.FT_Library = undefined;
-    var face: c.FT_Face = undefined;
+    var library: ft.FT_Library = undefined;
+    var face: ft.FT_Face = undefined;
 
-    if (c.FT_Init_FreeType(&library) != 0) {
+    if (ft.FT_Init_FreeType(&library) != 0) {
         std.debug.print("Failed to initialize FreeType\n", .{});
         return error.FreeTypeInitFailed;
     }
@@ -136,19 +24,19 @@ pub fn init(memory: *AppMemory) !void {
     };
     std.debug.print("Loading font: {s}\n", .{font_path});
 
-    if (c.FT_New_Face(memory.ft_library.?, font_path, 0, &face) != 0) {
+    if (ft.FT_New_Face(memory.ft_library.?, font_path, 0, &face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
         return error.FontLoadFailed;
     }
 
     memory.ft_face = face;
 
-    if (c.FT_Library_SetLcdFilter(memory.ft_library.?, c.FT_LCD_FILTER_DEFAULT) != 0) {
+    if (ft.FT_Library_SetLcdFilter(memory.ft_library.?, ft.FT_LCD_FILTER_DEFAULT) != 0) {
         std.debug.print("Failed to set LCD filter\n", .{});
         return error.LcdFilterFailed;
     }
 
-    if (c.FT_Set_Char_Size(memory.ft_face.?, 0, 16 * 64, 0, 0) != 0) {
+    if (ft.FT_Set_Char_Size(memory.ft_face.?, 0, 16 * 64, 0, 0) != 0) {
         std.debug.print("Failed to set char size\n", .{});
         return error.FontSizeFailed;
     }
@@ -160,11 +48,11 @@ pub fn init(memory: *AppMemory) !void {
 
 /// Start navigating to a URL. Sets state to Loading and begins the fetch.
 /// The actual fetch happens synchronously for now - will make async later.
-pub fn navigate(memory: *AppMemory, url: []const u8) void {
+pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: []const u8) void {
     // Reset arena to free all previous allocations
     _ = memory.arena.reset(.retain_capacity);
 
-    // Copy URL into our arena memory
+    std.debug.print("navigating to: {s}\n", .{url});
     const url_copy = memory.arena.allocator().dupe(u8, url) catch {
         memory.browser_state = .Error;
         memory.error_message = memory.arena.allocator().dupe(u8, "Out of memory") catch &.{};
@@ -190,45 +78,94 @@ pub fn navigate(memory: *AppMemory, url: []const u8) void {
     };
 
     memory.dom_tree = DOM.root;
+    memory.layout_tree = layout.buildLayoutTree(&memory.dom_tree.?, memory.arena.allocator());
+
+    // TODO: don't initialize like this. probably want to set up the main window differently - rcrichlow - 3/3/26
+    var window_dimensions = std.mem.zeroes(types.Dimensions);
+    window_dimensions.content.width = @floatFromInt(buffer.width);
+    window_dimensions.content.height = @floatFromInt(buffer.height);
+
+    std.debug.print("buffer width: {d}\n", .{buffer.width});
+    std.debug.print("window width: {d}\n", .{window_dimensions.content.width});
+    layout.layout(memory, memory.layout_tree.?, window_dimensions, 40);
+    //std.debug.print("layout_tree: {any}\n", .{memory.layout_tree});
     memory.browser_state = .Loaded;
 }
 
-/// Draw text at the given position using the loaded font
-fn drawText(memory: *AppMemory, buffer: *OffscreenBuffer, text: []const u8, x: i32, y: i32) void {
-    const slot: c.FT_GlyphSlot = memory.ft_face.*.glyph;
+fn paint(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, box: *types.LayoutBox) void {
+    if (box.node) |node| {
+        switch (node) {
+            .Element => {
+                for (box.children.items) |child| paint(memory, buffer, child);
+            },
+            .Text => |tx| {
+                if (tx.content.len > 0) {
+                    //const x = box.dimensions.content.x;
+                    //const y = box.dimensions.content.y;
+                    // trim text before drawing to avoid rendering whitespace-only text nodes
+                    // TODO: ideally we would trim the text during layout and not create boxes for 
+                    // whitespace-only text nodes at all, but this is a quick fix for now - rcrichlow - 3/19/26
+                    //drawText(memory, buffer, std.mem.trim(u8, tx.content, " \t\n\r"), @intFromFloat(x), @intFromFloat(y));
+
+                    // not going to trim here for now since we're going to normalize whitespace during 
+                    // layout and not create boxes for whitespace-only text nodes
+                    //drawText(memory, buffer, tx.content, @intFromFloat(x), @intFromFloat(y));
+                    
+                    if (box.fragments) |fragments| {
+                        for (fragments.items) |fragment| {
+                            drawText(memory, buffer, fragment.content, @intFromFloat(fragment.x), @intFromFloat(fragment.y));
+                        }
+                    }
+                }
+            },
+        }
+    } else {
+        // Anonymous box — no node, just paint children
+        for (box.children.items) |child| paint(memory, buffer, child);
+    }
+}
+
+/// Draw text at the given position using the loaded font.
+/// The y parameter represents the top of the text line, not the baseline.
+fn drawText(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, text: []const u8, x: i32, y: i32) void {
+    const face = memory.ft_face.?;
+    const slot: ft.FT_GlyphSlot = face.*.glyph;
+    const ascender: i32 = @intCast(face.*.size.*.metrics.ascender >> 6);
     var draw_x = x;
+    const baseline_y = y + ascender;
     for (text) |char| {
-        const char_index = c.FT_Get_Char_Index(memory.ft_face.?, char);
-        if (c.FT_Load_Glyph(memory.ft_face.?, char_index, c.FT_LOAD_DEFAULT) != 0) {
+        const char_index = ft.FT_Get_Char_Index(memory.ft_face.?, char);
+        if (ft.FT_Load_Glyph(memory.ft_face.?, char_index, ft.FT_LOAD_DEFAULT) != 0) {
             continue;
         }
 
-        if (c.FT_Render_Glyph(slot, c.FT_RENDER_MODE_LCD) != 0) {
+        if (ft.FT_Render_Glyph(slot, ft.FT_RENDER_MODE_LCD) != 0) {
             continue;
         }
 
-        buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, y - slot.*.bitmap_top, memory.text_color);
+        buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, baseline_y - slot.*.bitmap_top, memory.text_color);
         draw_x += @intCast(slot.*.advance.x >> 6);
     }
 }
 
 /// Render the current browser state to the buffer
-fn render(memory: *AppMemory, buffer: *OffscreenBuffer) void {
+fn render(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
     buffer.clear(memory.background_color);
 
     switch (memory.browser_state) {
         .Idle => {
             // Draw URL bar or instructions
-            drawText(memory, buffer, "Press F5 to load example.com", 10, 30);
+            drawText(memory, buffer, "Press F5 to load example.com", 10, 10);
         },
         .Loading => {
             drawText(memory, buffer, "Loading...", 10, 30);
         },
         .Loaded => {
-            drawText(memory, buffer, memory.current_url, 10, 30);
+            drawText(memory, buffer, memory.current_url, 10, 10);
             // TODO: Render parsed HTML
-            var y: i32 = 50;
-            renderNode(memory, buffer, memory.dom_tree.?, 10, &y);
+            //var y: i32 = 50;
+            //renderNode(memory, buffer, memory.dom_tree.?, 10, &y);
+            paint(memory, buffer, memory.layout_tree.?);
         },
         .Error => {
             drawText(memory, buffer, "Error:", 10, 30);
@@ -237,7 +174,7 @@ fn render(memory: *AppMemory, buffer: *OffscreenBuffer) void {
     }
 }
 
-fn renderNode(memory: *AppMemory, buffer: *OffscreenBuffer, node: dom.Node, x: i32, y: *i32) void {
+fn renderNode(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, node: types.Node, x: i32, y: *i32) void {
     switch (node) {
         .Element => |el| {
             for (el.children.items) |child| renderNode(memory, buffer, child, x, y);
@@ -251,12 +188,13 @@ fn renderNode(memory: *AppMemory, buffer: *OffscreenBuffer, node: dom.Node, x: i
     }
 }
 
-pub fn updateAndRender(memory: *AppMemory, buffer: *OffscreenBuffer) void {
+pub fn updateAndRender(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
     if (memory.ft_is_initialized == false) {
         _ = init(memory) catch |err| {
             std.debug.print("FreeType initialization error: {any}\n", .{err});
             return;
         };
+
         memory.browser_state = .Idle;
     }
 

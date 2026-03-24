@@ -1,22 +1,8 @@
 const std = @import("std");
-
-pub const Node = union(enum) {
-    Element: *ElementNode,
-    Text: *TextNode,
-};
-
-pub const ElementNode = struct {
-    tag_name: []const u8,
-    raw_attributes: []const u8,
-    children: std.ArrayList(Node),
-};
-
-pub const TextNode = struct {
-    content: []const u8,
-};
+const types = @import("types.zig");
 
 pub const DOM = struct {
-    root: ?Node,
+    root: ?types.Node,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) DOM {
@@ -27,7 +13,7 @@ pub const DOM = struct {
     }
 
     pub fn parse(self: *DOM, html: []const u8) !void {
-        var parent_stack = try std.ArrayList(*ElementNode).initCapacity(self.allocator, 8);
+        var parent_stack = try std.ArrayList(*types.ElementNode).initCapacity(self.allocator, 8);
         defer parent_stack.deinit(self.allocator);
 
         var i: usize = 0;
@@ -44,7 +30,8 @@ pub const DOM = struct {
                     is_end_tag = true;
                 } else if (tag_start + 2 < html.len and html[tag_start] == '!' and html[tag_start + 1] == '-' and html[tag_start + 2] == '-') {
                     is_comment_tag = true;
-                } else if (tag_start + 8 < html.len and html[tag_start] == '!' and std.mem.startsWith(u8, html[tag_start..], "!doctype")) {
+                } else if (tag_start + 8 < html.len and html[tag_start] == '!' and 
+                          (std.mem.startsWith(u8, html[tag_start..], "!doctype") or std.mem.startsWith(u8, html[tag_start..], "!DOCTYPE"))) {
                     is_doctype_tag = true;
                 }
 
@@ -74,9 +61,9 @@ pub const DOM = struct {
                             if (std.mem.eql(u8, tag_name, v)) break true;
                         } else false;
 
-                        const children = try std.ArrayList(Node).initCapacity(self.allocator, 4);
-                        const el_ptr = try self.allocator.create(ElementNode);
-                        el_ptr.* = ElementNode{
+                        const children = try std.ArrayList(types.Node).initCapacity(self.allocator, 4);
+                        const el_ptr = try self.allocator.create(types.ElementNode);
+                        el_ptr.* = types.ElementNode{
                             .tag_name = tag_name,
                             .raw_attributes = raw_attributes,
                             .children = children,
@@ -84,7 +71,7 @@ pub const DOM = struct {
 
                         // Add to current parent
                         if (parent_stack.items.len > 0) {
-                            try parent_stack.items[parent_stack.items.len - 1].children.append(self.allocator, Node{ .Element = el_ptr });
+                            try parent_stack.items[parent_stack.items.len - 1].children.append(self.allocator, types.Node{ .Element = el_ptr });
                         }
 
                         // Push to stack if not void
@@ -94,7 +81,7 @@ pub const DOM = struct {
 
                         // Set root if first
                         if (self.root == null) {
-                            self.root = Node{ .Element = el_ptr };
+                            self.root = types.Node{ .Element = el_ptr };
                         }
                     }
                 }
@@ -108,23 +95,24 @@ pub const DOM = struct {
                 const text_end = i;
                 if (text_end > text_start and parent_stack.items.len > 0) {
                     const text_content = html[text_start..text_end];
-                    const txt_ptr = try self.allocator.create(TextNode);
-                    txt_ptr.* = TextNode{ .content = text_content };
-                    try parent_stack.items[parent_stack.items.len - 1].children.append(self.allocator, Node{ .Text = txt_ptr });
+                    const txt_ptr = try self.allocator.create(types.TextNode);
+                    txt_ptr.* = types.TextNode{ .content = text_content };
+                    try parent_stack.items[parent_stack.items.len - 1].children.append(self.allocator, types.Node{ .Text = txt_ptr });
                 }
             }
         }
 
-        if (self.root) |root| {
-            dump(root, 0);
-        }
+        //if (self.root) |root| {
+        //    dump(root, 0);
+        //}
     }
 
-    pub fn dump(node: Node, indent: usize) void {
+    // just for debugging purposes
+    pub fn dump(node: types.Node, indent: usize) void {
         for (0..indent) |_| std.debug.print(" ", .{});
         switch (node) {
             .Element => |el| {
-                std.debug.print("<{s}> ({d} kids)\n", .{el.tag_name, el.children.items.len});
+                std.debug.print("<{s}> ({d} kids)\n", .{ el.tag_name, el.children.items.len });
                 for (el.children.items) |child| dump(child, indent + 1);
             },
             .Text => |tx| {
