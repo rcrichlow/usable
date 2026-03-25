@@ -96,7 +96,9 @@ fn paint(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, box: *types.L
     if (box.node) |node| {
         switch (node) {
             .Element => {
-                for (box.children.items) |child| paint(memory, buffer, child);
+                if (box.children) |children| {
+                    for (children.items) |child| paint(memory, buffer, child);
+                }
             },
             .Text => |tx| {
                 if (tx.content.len > 0) {
@@ -121,7 +123,9 @@ fn paint(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, box: *types.L
         }
     } else {
         // Anonymous box — no node, just paint children
-        for (box.children.items) |child| paint(memory, buffer, child);
+        if (box.children) |children| {
+            for (children.items) |child| paint(memory, buffer, child);
+        }
     }
 }
 
