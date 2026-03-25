@@ -34,18 +34,20 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
                 return layout_box;
             };
 
+            layout_box.?.* = types.LayoutBox{
+                .box_type = .Inline,
+                .node = node.*,
+                .dimensions = dimensions,
+                .fragments = null,
+                .children = null,
+            };
+
             const children = std.ArrayList(*types.LayoutBox).initCapacity(allocator, 4) catch |err| {
                 std.debug.print("error allocating layout box children: {any}\n", .{err});
                 return layout_box;
             };
 
-            layout_box.?.* = types.LayoutBox{
-                .box_type = .Inline,
-                .node = node.*,
-                .dimensions = dimensions,
-                .children = children,
-                .fragments = null,
-            };
+            layout_box.?.children = children;
 
             // TODO: handle mixed content for block boxes with inline and block children - rcrichlow - 3/2/26
             //std.debug.print("handling {s}\n", .{el.tag_name});
@@ -59,7 +61,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
             for (el.children.items) |child| {
                 const built_child = buildLayoutTree(&child, allocator);
                 if (built_child != null) {
-                    layout_box.?.children.append(allocator, built_child.?) catch |err| {
+                    layout_box.?.children.?.append(allocator, built_child.?) catch |err| {
                         std.debug.print("error adding layout box: {any}\n", .{err});
                     };
                 }
@@ -81,20 +83,24 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
                 .node = node.*,
                 .dimensions = dimensions,
                 .fragments = null,
-                .children = std.ArrayList(*types.LayoutBox).initCapacity(allocator, 0) catch |err| {
-                    std.debug.print("error allocating text layout box children: {any}\n", .{err});
-                    return layout_box;
-                },
+                .children = null,
             };
+
+            const children = std.ArrayList(*types.LayoutBox).initCapacity(allocator, 0) catch |err| {
+                std.debug.print("error allocating text layout box children: {any}\n", .{err});
+                return layout_box;
+            };
+
+            layout_box.?.children = children;
 
             return layout_box;
         },
     }
 
     // check if we need anonymous blocks
-    if (layout_box != null and layout_box.?.box_type == .Block and layout_box.?.children.items.len > 0) {
+    if (layout_box != null and layout_box.?.box_type == .Block and layout_box.?.children.?.items.len > 0) {
         var block_types_found: [2]bool = .{ false, false }; // inline,block
-        for (layout_box.?.children.items) |box| {
+        for (layout_box.?.children.?.items) |box| {
             if (box.box_type == .Inline and block_types_found[0] == false) {
                 block_types_found[0] = true;
             }
@@ -115,7 +121,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
             };
 
             var current_anon: ?*types.LayoutBox = null;
-            for (layout_box.?.children.items) |box| {
+            for (layout_box.?.children.?.items) |box| {
                 if (box.box_type == .Block) {
                     // finalize any in-progress anonymous block
                     if (current_anon) |anon| {
@@ -151,7 +157,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
                             },
                         };
                     }
-                    current_anon.?.children.append(allocator, box) catch |err| {
+                    current_anon.?.children.?.append(allocator, box) catch |err| {
                         std.debug.print("error adding layout box: {any}\n", .{err});
                     };
                 }
@@ -224,9 +230,11 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
             var child_y_offset: f32 = 0;
-            for (layout_box.children.items) |child| {
-                layout(memory, child, layout_box.dimensions, child_y_offset);
-                child_y_offset += child.dimensions.marginBox().height;
+            if (layout_box.children) |children| {
+                for (children.items) |child| {
+                    layout(memory, child, layout_box.dimensions, child_y_offset);
+                    child_y_offset += child.dimensions.marginBox().height;
+                }
             }
 
             layout_box.dimensions.content.height = child_y_offset;
@@ -306,10 +314,13 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
                 var child_y_offset: f32 = 0;
-                for (layout_box.children.items) |child| {
-                    layout(memory, child, layout_box.dimensions, child_y_offset);
-                    child_y_offset += child.dimensions.marginBox().height;
+                if  (layout_box.children) |children| {
+                    for (children.items) |child| {
+                        layout(memory, child, layout_box.dimensions, child_y_offset);
+                        child_y_offset += child.dimensions.marginBox().height;
+                    }
                 }
+
                 layout_box.dimensions.content.height = child_y_offset;
             }
         },
@@ -325,10 +336,12 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
             var child_y_offset: f32 = 0;
-            for (layout_box.children.items) |child| {
-                std.debug.print("child type: {any}\n", .{child.box_type});
-                layout(memory, child, layout_box.dimensions, child_y_offset);
-                child_y_offset += child.dimensions.marginBox().height;
+            if (layout_box.children) |children| {
+                for (children.items) |child| {
+                    std.debug.print("child type: {any}\n", .{child.box_type});
+                    layout(memory, child, layout_box.dimensions, child_y_offset);
+                    child_y_offset += child.dimensions.marginBox().height;
+                }
             }
 
             layout_box.dimensions.content.height = child_y_offset;

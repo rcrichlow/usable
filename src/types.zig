@@ -70,7 +70,7 @@ pub const TextFragment = struct {
 
 pub const LayoutBox = struct {
     node: ?Node,
-    children: std.ArrayList(*LayoutBox),
+    children: ?std.ArrayList(*LayoutBox),
     dimensions: Dimensions,
     box_type: BoxType,
     fragments: ?std.ArrayList(TextFragment), // only for text nodes
