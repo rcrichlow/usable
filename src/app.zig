@@ -78,7 +78,22 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     };
 
     memory.dom_tree = DOM.root;
+    if (memory.dom_tree == null) {
+        // TODO: should probably handle this a bit more gracefully, but it's better than a panic - rcrichlow - 3/25/26
+        memory.browser_state = .Error;
+        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to build DOM tree.") catch &.{};
+        std.debug.print("Failed to build DOM tree.\n", .{});
+        return;
+    }
+
     memory.layout_tree = layout.buildLayoutTree(&memory.dom_tree.?, memory.arena.allocator());
+    if (memory.layout_tree == null) {
+        // TODO: should probably handle this a bit more gracefully, but it's better than a panic - rcrichlow - 3/25/26
+        memory.browser_state = .Error;
+        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to build layout tree.") catch &.{};
+        std.debug.print("Failed to build layout tree.\n", .{});
+        return;
+    }
 
     // TODO: don't initialize like this. probably want to set up the main window differently - rcrichlow - 3/3/26
     var window_dimensions = std.mem.zeroes(types.Dimensions);
@@ -169,7 +184,9 @@ fn render(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
             drawText(memory, buffer, memory.current_url, 10, 10);
 
             // the actual DOM layout tree
-            paint(memory, buffer, memory.layout_tree.?);
+            if (memory.layout_tree) |layout_tree| {
+                paint(memory, buffer, layout_tree);
+            }
         },
         .Error => {
             drawText(memory, buffer, "Error:", 10, 30);
