@@ -3,10 +3,9 @@ const c = @cImport({
     @cInclude("X11/Xlib.h");
     @cInclude("sys/shm.h");
     @cInclude("X11/extensions/XShm.h");
-    @cInclude("freetype2/ft2build.h");
-    @cInclude("freetype2/freetype/freetype.h");
 });
 const app = @import("app.zig");
+const types = @import("types.zig");
 
 const BYTES_PER_PIXEL = 4;
 const XImage = c.XImage;
@@ -254,17 +253,22 @@ pub fn main() !void {
 
     _ = c.XStoreName(display, window, "Usable Browser");
     _ = c.XMapWindow(display, window);
+    _ = c.XSync(display, 0);
 
     const gc = c.XCreateGC(display, window, 0, null);
     defer _ = c.XFreeGC(display, gc);
 
     // Get URL from command line args, fallback to example.com
+    // Must duplicate the URL before args are freed to avoid use-after-free
     var initial_url: []const u8 = "http://example.com";
     if (std.process.argsAlloc(std.heap.page_allocator)) |args| {
-        defer std.process.argsFree(std.heap.page_allocator, args);
+        // args are freed at the END of main, not here
         if (args.len > 1) {
-            initial_url = args[1];
+            // Copy URL to our own allocation before anything else uses page_allocator
+            initial_url = std.heap.page_allocator.dupe(u8, args[1]) catch initial_url;
         }
+        // Free args immediately since we've copied what we need
+        std.process.argsFree(std.heap.page_allocator, args);
     } else |_| {
         std.debug.print("Failed to parse args, using default URL\n", .{});
     }
@@ -286,7 +290,7 @@ pub fn main() !void {
     var fixed_buffer = std.heap.FixedBufferAllocator.init(persistent);
     const arena = std.heap.ArenaAllocator.init(fixed_buffer.allocator());
 
-    var app_memory: app.AppMemory = .{
+    var app_memory: types.AppMemory = .{
         .ft_library = undefined,
         .ft_face = undefined,
         .ft_is_initialized = false,
@@ -295,6 +299,7 @@ pub fn main() !void {
         .response_body = &.{},
         .error_message = &.{},
         .dom_tree = undefined,
+        .layout_tree = undefined,
         .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, // white
         .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
         .arena = arena,
@@ -309,6 +314,7 @@ pub fn main() !void {
     }
 
     var running = true;
+    var buffer: types.OffscreenBuffer = undefined;
     while (running) {
         while (c.XPending(display) > 0) {
             var event: c.XEvent = undefined;
@@ -322,7 +328,7 @@ pub fn main() !void {
                     const keycode = event.xkey.keycode;
                     std.debug.print("Key pressed: {d}\n", .{keycode});
                     if (keycode == 71) { // F5 key
-                        app.navigate(&app_memory, initial_url);
+                        app.navigate(&app_memory, &buffer, initial_url);
                     }
                     if (keycode == 9) { // Escape key
                         running = false;
@@ -332,14 +338,18 @@ pub fn main() !void {
                     const width = event.xconfigure.width;
                     const height = event.xconfigure.height;
                     std.debug.print("Window resized: {d}x{d}\n", .{ width, height });
+                    //std.debug.print("prev buffer width: {d}\n", .{backbuffer.width});
+                    //std.debug.print("prev buffer height: {d}\n", .{backbuffer.height});
                     backbuffer.resize(width, height);
+                    //std.debug.print("new buffer width: {d}\n", .{backbuffer.width});
+                    //std.debug.print("new buffer height: {d}\n", .{backbuffer.height});
                 },
                 else => {},
             }
         }
 
         const render = backbuffer.getRenderBuffer();
-        var buffer = app.OffscreenBuffer{
+        buffer = types.OffscreenBuffer{
             .memory = render.memory,
             .width = backbuffer.width,
             .height = backbuffer.height,

@@ -4,7 +4,7 @@ Usable is a learning project to build a web browser from scratch using Zig. The 
 understand how browsers work from the ground up by implementing core components manually rather 
 than using existing engines. This will likely be ugly and naive for a while.
 
-The project currently supports Linux (X11) and Windows (Win32/GDI), with plans to add macOS in the future.
+The project currently builds and runs on Linux (X11). A Windows (Win32/GDI) platform layer is still in the repository, but it is currently out of sync with the shared browser code and does not build cleanly today; bringing it back into a working state is still intended. macOS may be added in the future.
 
 ## Design
 
@@ -14,15 +14,16 @@ from source to handle font rendering.
 
 ## Current Capabilities
 
-- X11 window creation and event handling.
-- HTTP fetching using the Zig standard library client.
-- FreeType integration for text rendering.
+- Linux X11 window creation and event handling.
+- Double-buffered Linux software backbuffer with MIT-SHM when available and `XPutImage` fallback.
+- Synchronous HTTP fetching using the Zig standard library client.
+- Minimal HTML parsing into a DOM tree, including element and text nodes.
+- Basic layout-tree construction with block, inline, and anonymous boxes.
+- Basic word-wrapped text layout and FreeType-based software text rendering.
 
 ## Platform Layers
 
-The platform layers (Linux/X11 and Windows/Win32) are currently a minimal starting point to get the 
-browser rendering. They will likely need significant revision as the browser architecture evolves, 
-particularly around:
+The platform layers are still a minimal starting point to get the browser rendering. Linux/X11 is the currently working path. The Windows/Win32 layer is presently stale and needs to be brought back in sync with the shared app/types API, but it is meant to be fixed rather than removed. Both platform layers will likely need significant revision as the browser architecture evolves, particularly around:
 
 - Better separation between platform code and browser logic
 - Shared rendering abstractions
@@ -34,12 +35,12 @@ particularly around:
 
 ### Core Browser Features
 
-- HTML tokenizer and parser
-- Display common tags
+- More complete HTML parsing and DOM support
+- Display more common tags and richer page structure
 - Form controls
 - CSS selector matching
-- Layout engine implementing the box model
-- URL parsing and navigation
+- Layout engine beyond the current basic block/inline text flow
+- Navigation improvements and better URL handling
 - Tabbed browsing
 - Bookmarks and history
 
