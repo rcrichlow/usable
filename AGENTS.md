@@ -5,13 +5,14 @@ Usable is a learning project to build a web browser from scratch in Zig.
 
 The current codebase can:
 - open a native X11 window on Linux,
+- open a native Win32 window on Windows,
 - fetch a URL synchronously with `std.http.Client`,
 - parse a small subset of HTML into a DOM tree,
 - build a separate layout tree,
 - perform basic block/inline text layout with word wrapping,
 - render text through FreeType into a software framebuffer.
 
-The repository still contains a Win32/GDI platform file, but the Windows target is currently out of sync with the shared app/types API and does **not** build cleanly as of 2026-03-25.
+The repository now contains working Linux/X11 and Windows/Win32 platform entrypoints that share the same app lifecycle and memory setup.
 
 ## STRUCTURE
 ```text
@@ -23,7 +24,7 @@ usable/
 │   ├── types.zig            # Shared browser, layout, and framebuffer types
 │   ├── c_imports.zig        # FreeType @cImport wrapper
 │   ├── linux_platform.zig   # X11 entrypoint, event loop, backbuffer
-│   ├── win32_platform.zig   # Win32/GDI entrypoint (currently stale/broken)
+│   ├── win32_platform.zig   # Win32/GDI entrypoint, message loop, and DIB backbuffer
 │   └── freetype_config/     # FreeType build overrides
 ├── vendor/freetype2/        # Vendored FreeType source
 ├── build.zig                # Zig build script and target wiring
@@ -34,6 +35,8 @@ usable/
 ## CURRENT CAPABILITIES
 - Linux X11 window creation and event loop
 - Double-buffered Linux backbuffer using MIT-SHM when available, with `XPutImage` fallback
+- Windows Win32 window creation and message loop
+- Double-buffered Windows GDI backbuffer using 32-bit DIB sections
 - HTTP fetching via `std.http.Client`
 - Minimal HTML parsing for element/text nodes
 - Comment and doctype skipping in the parser
@@ -52,7 +55,7 @@ usable/
 | Shared state and geometry | `src/types.zig` | DOM nodes, layout boxes, app memory, colors, framebuffer |
 | FreeType bindings | `src/c_imports.zig` + `build.zig` | `@cImport` wrapper plus static library build wiring |
 | Linux platform/runtime | `src/linux_platform.zig` | Main entrypoint used for native Linux builds |
-| Windows platform status | `src/win32_platform.zig` | File exists, but references outdated app APIs |
+| Windows platform/runtime | `src/win32_platform.zig` | Win32 entrypoint mirroring Linux app memory setup and render loop |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -92,18 +95,19 @@ zig build test            # Run the configured test step for the current target
 zig build --help          # Show available steps/options
 ```
 
-## VERIFIED CURRENT STATE (2026-03-25)
+## VERIFIED CURRENT STATE (2026-03-26)
 - Native `zig build` succeeds on this Linux environment.
 - Native `zig build test` succeeds, but there are currently no Zig `test` blocks in the repo.
 - `zig build --help` exposes `install`, `run`, and `test` steps.
-- Cross-building for `x86_64-windows-gnu` currently fails.
+- Cross-building for `x86_64-windows-gnu` succeeds.
 
 ## IMPORTANT NOTES
-- Linux currently appears to be the only verified working target.
-- `src/win32_platform.zig` still refers to `app.AppMemory`, `app.OffscreenBuffer`, and `app.start()`, but `src/app.zig` no longer exports those symbols. Treat Windows support as stale until fixed.
+- Linux and Windows both have verified buildable platform entrypoints.
 - The initial Linux window size is `800x600`.
+- The initial Windows client area also targets `800x600`.
 - Linux defaults to `http://example.com` when no URL is passed on the command line.
-- On Linux, `F5` triggers navigation to the initial URL and `Escape` exits.
+- Windows also defaults to `http://example.com` when no URL is passed on the command line.
+- On Linux and Windows, `F5` triggers navigation to the initial URL and `Escape` exits.
 - The font path is hardcoded:
   - Linux: `/usr/share/fonts/noto/NotoSans-Regular.ttf`
   - Windows: `C:\Windows\Fonts\arial.ttf`
@@ -116,12 +120,13 @@ zig build --help          # Show available steps/options
 - Page-scoped content is allocated from `AppMemory.arena` and reset on each navigation.
 - DOM, layout tree, and fetched response body all live off the page arena.
 - Rendering uses a BGRA8 software buffer, not GPU APIs.
+- Linux and Windows both allocate `32 MiB` persistent storage plus `64 MiB` transient storage in the platform layer.
 - Layout uses `Dimensions` plus `margin` / `padding` / `border` helpers in `src/types.zig`.
 - Mixed block/inline children under a block container are normalized with anonymous boxes.
 - Non-visual elements skipped during layout include: `head`, `style`, `script`, `title`, `meta`, and `link`.
 
 ## ANTI-PATTERNS / LIMITS (THIS PROJECT)
-- Do not assume Windows support is currently working just because `src/win32_platform.zig` exists.
+- Do not assume Linux and Windows have identical presentation internals; Linux uses X11/XShm paths while Windows uses GDI DIB blits.
 - Do not assume CSS, JavaScript, images, forms, cookies, or async networking exist.
 - No code generation; parsing, layout, and platform layers are handwritten.
 - No external runtime dependencies beyond vendored FreeType and platform system libraries.
@@ -133,13 +138,13 @@ zig build --help          # Show available steps/options
 - The layout tree is separate from the DOM tree rather than storing layout directly on DOM nodes.
 - Text layout is currently word-oriented: text nodes become positioned fragments instead of a single painted run.
 - Linux presentation uses a double-buffered X11 backbuffer with MIT-SHM fast path and malloc/XImage fallback.
+- Windows presentation uses a double-buffered Win32/GDI backbuffer with front/back DIB sections and `BitBlt` presentation from `WM_PAINT`.
 - When README claims and source/build results disagree, trust source files and verified build output.
 
 ## BOUNDARIES
 - **Never**
   - generate code, propose code changes, or modify files unless the user explicitly requests it.
   - automate tasks or produce full implementations unless directly instructed.
-  - claim Windows is supported without verifying the build first.
 - **Always**
   - minimize the amount of work performed on behalf of the user.
   - focus on explanations, reasoning, and conceptual clarity.
