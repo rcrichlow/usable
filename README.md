@@ -4,7 +4,7 @@ Usable is a learning project to build a web browser from scratch using Zig. The 
 understand how browsers work from the ground up by implementing core components manually rather 
 than using existing engines. This will likely be ugly and naive for a while.
 
-The project currently builds and runs on Linux (X11). A Windows (Win32/GDI) platform layer is still in the repository, but it is currently out of sync with the shared browser code and does not build cleanly today; bringing it back into a working state is still intended. macOS may be added in the future.
+The project currently has working Linux (X11) and Windows (Win32/GDI) platform entrypoints. Both paths use the shared browser/app code, allocate the same app memory layout, and render into software framebuffers. macOS may be added in the future.
 
 ## Design
 
@@ -16,6 +16,8 @@ from source to handle font rendering.
 
 - Linux X11 window creation and event handling.
 - Double-buffered Linux software backbuffer with MIT-SHM when available and `XPutImage` fallback.
+- Windows Win32 window creation and event handling.
+- Double-buffered Windows GDI software backbuffer using 32-bit DIB sections.
 - Synchronous HTTP fetching using the Zig standard library client.
 - Minimal HTML parsing into a DOM tree, including element and text nodes.
 - Basic layout-tree construction with block, inline, and anonymous boxes.
@@ -23,7 +25,7 @@ from source to handle font rendering.
 
 ## Platform Layers
 
-The platform layers are still a minimal starting point to get the browser rendering. Linux/X11 is the currently working path. The Windows/Win32 layer is presently stale and needs to be brought back in sync with the shared app/types API, but it is meant to be fixed rather than removed. Both platform layers will likely need significant revision as the browser architecture evolves, particularly around:
+The platform layers are still a minimal starting point to get the browser rendering. Linux/X11 and Windows/Win32 now both follow the same high-level lifecycle: each platform allocates `AppMemory`, owns a software backbuffer, continuously renders through `app.updateAndRender()`, and uses `F5`/`Escape` for reload/exit behavior. They still differ in presentation details (`XShm`/`XPutImage` on Linux vs GDI DIB blits on Windows). Both platform layers will likely need significant revision as the browser architecture evolves, particularly around:
 
 - Better separation between platform code and browser logic
 - Shared rendering abstractions
@@ -80,6 +82,7 @@ The platform layers are still a minimal starting point to get the browser render
 
 - Zig 0.15.2 or newer
 - X11 development libraries (libX11) - Linux only
+- A MinGW-w64-style Windows toolchain when cross-building to `x86_64-windows-gnu`
 
 ## Building
 
