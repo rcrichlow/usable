@@ -349,6 +349,9 @@ pub fn main() !void {
                     //std.debug.print("prev buffer width: {d}\n", .{backbuffer.width});
                     //std.debug.print("prev buffer height: {d}\n", .{backbuffer.height});
                     backbuffer.resize(width, height);
+                    render = backbuffer.getRenderBuffer();
+                    buffer.memory = render.memory;
+                    buffer.pitch = render.pitch;
                     buffer.width = backbuffer.width;
                     buffer.height = backbuffer.height;
                     //std.debug.print("new buffer width: {d}\n", .{backbuffer.width});
