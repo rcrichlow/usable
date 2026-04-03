@@ -313,8 +313,16 @@ pub fn main() !void {
         std.debug.print("Platform: using XPutImage fallback for backbuffer\n", .{});
     }
 
+    var render = backbuffer.getRenderBuffer();
+    var buffer = types.OffscreenBuffer{
+        .memory = render.memory,
+        .width = backbuffer.width,
+        .height = backbuffer.height,
+        .pitch = render.pitch,
+        .bytes_per_pixel = BYTES_PER_PIXEL,
+    };
+
     var running = true;
-    var buffer: types.OffscreenBuffer = undefined;
     while (running) {
         while (c.XPending(display) > 0) {
             var event: c.XEvent = undefined;
@@ -341,6 +349,8 @@ pub fn main() !void {
                     //std.debug.print("prev buffer width: {d}\n", .{backbuffer.width});
                     //std.debug.print("prev buffer height: {d}\n", .{backbuffer.height});
                     backbuffer.resize(width, height);
+                    buffer.width = backbuffer.width;
+                    buffer.height = backbuffer.height;
                     //std.debug.print("new buffer width: {d}\n", .{backbuffer.width});
                     //std.debug.print("new buffer height: {d}\n", .{backbuffer.height});
                 },
@@ -348,14 +358,9 @@ pub fn main() !void {
             }
         }
 
-        const render = backbuffer.getRenderBuffer();
-        buffer = types.OffscreenBuffer{
-            .memory = render.memory,
-            .width = backbuffer.width,
-            .height = backbuffer.height,
-            .pitch = render.pitch,
-            .bytes_per_pixel = BYTES_PER_PIXEL,
-        };
+        render = backbuffer.getRenderBuffer();
+        buffer.memory = render.memory;
+        buffer.pitch = render.pitch;
 
         app.updateAndRender(&app_memory, &buffer);
         backbuffer.blitAndSwap(window, gc);
