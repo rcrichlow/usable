@@ -63,6 +63,8 @@ const ShmBuffer = struct {
                         self.pitch = img.bytes_per_line;
                         self.using_shm = true;
                         _ = c.shmctl(shm_id, c.IPC_RMID, null);
+                        // Clear to white so the first Expose doesn't blit garbage
+                        @memset(self.memory[0..size], 0xFF);
                         return;
                     }
                 }
@@ -92,6 +94,8 @@ const ShmBuffer = struct {
         self.ximage = fallback_image orelse @panic("XCreateImage failed");
         self.memory = raw_ptr;
         self.pitch = self.ximage.bytes_per_line;
+        // Clear to white so the first Expose doesn't blit garbage
+        @memset(self.memory[0..alloc_size], 0xFF);
     }
 
     fn destroy(self: *ShmBuffer, display: *c.Display) void {
