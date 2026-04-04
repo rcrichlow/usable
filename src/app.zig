@@ -73,6 +73,8 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     memory.response_body = response_body;
     var DOM = dom.DOM.init(memory.arena.allocator());
     DOM.parse(response_body) catch |err| {
+        memory.browser_state = .Error;
+        memory.error_message = memory.arena.allocator().dupe(u8, "Parse error") catch &.{};
         std.debug.print("Parse error: {any}\n", .{err});
         return;
     };
@@ -189,6 +191,7 @@ fn render(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
             }
         },
         .Error => {
+            // TODO: gracefully handle errors instead of just dumping text to the screen - rcrichlow - 4/3/26
             drawText(memory, buffer, "Error:", 10, 30);
             drawText(memory, buffer, memory.error_message, 10, 60);
         },
