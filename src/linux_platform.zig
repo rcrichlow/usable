@@ -3,11 +3,14 @@ const c = @cImport({
     @cInclude("X11/Xlib.h");
     @cInclude("sys/shm.h");
     @cInclude("X11/extensions/XShm.h");
+    @cInclude("time.h");
 });
 const app = @import("app.zig");
 const types = @import("types.zig");
 
 const BYTES_PER_PIXEL = 4;
+const TARGET_FPS = 60;
+const TARGET_SECONDS_PER_FRAME: f32 = 1.0 / @as(f32, TARGET_FPS);
 const XImage = c.XImage;
 
 /// Call the destroy function through the XImage function-pointer table.
@@ -222,6 +225,24 @@ const X11Backbuffer = struct {
     }
 };
 
+// =============================================================================
+// Clock helpers
+// =============================================================================
+
+fn getWallClock() c.struct_timespec {
+    var ts: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &ts) == -1) {
+        @panic("clock_gettime(CLOCK_MONOTONIC) failed");
+    }
+    return ts;
+}
+
+fn secondsElapsed(start: c.struct_timespec, end: c.struct_timespec) f32 {
+    const sec = end.tv_sec - start.tv_sec;
+    const nsec = end.tv_nsec - start.tv_nsec;
+    return @as(f32, @floatFromInt(sec)) + @as(f32, @floatFromInt(nsec)) / 1_000_000_000.0;
+}
+
 pub fn main() !void {
     const display = c.XOpenDisplay(null) orelse {
         std.debug.print("Failed to open X display\n", .{});
@@ -327,6 +348,7 @@ pub fn main() !void {
     };
 
     var running = true;
+    var last_clock = getWallClock();
     while (running) {
         while (c.XPending(display) > 0) {
             var event: c.XEvent = undefined;
@@ -372,5 +394,14 @@ pub fn main() !void {
         app.updateAndRender(&app_memory, &buffer);
         backbuffer.blitAndSwap(window, gc);
         _ = c.XFlush(display);
+
+        // Cap at ~60 fps — sleep only the remaining time after frame work
+        const work_elapsed = secondsElapsed(last_clock, getWallClock());
+        if (work_elapsed < TARGET_SECONDS_PER_FRAME) {
+            const sleep_s = TARGET_SECONDS_PER_FRAME - work_elapsed;
+            const sleep_ns: u64 = @intFromFloat(sleep_s * 1_000_000_000.0);
+            std.Thread.sleep(sleep_ns);
+        }
+        last_clock = getWallClock();
     }
 }
