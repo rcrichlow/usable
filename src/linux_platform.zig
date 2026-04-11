@@ -231,7 +231,9 @@ const X11Backbuffer = struct {
 
 fn getWallClock() c.struct_timespec {
     var ts: c.struct_timespec = undefined;
-    _ = c.clock_gettime(c.CLOCK_MONOTONIC, &ts);
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &ts) == -1) {
+        @panic("clock_gettime(CLOCK_MONOTONIC) failed");
+    }
     return ts;
 }
 
@@ -402,7 +404,11 @@ pub fn main() !void {
                 .tv_sec = 0,
                 .tv_nsec = sleep_ns,
             };
-            while (c.nanosleep(&req, &req) == -1) {}
+            while (c.nanosleep(&req, &req) == -1) {
+                // Retry only on signal interruption; break on any other error
+                // (e.g. EINVAL from an invalid timespec) to avoid a busy-loop.
+                if (std.c._errno().* != @intFromEnum(std.posix.E.INTR)) break;
+            }
         }
         last_clock = getWallClock();
     }
