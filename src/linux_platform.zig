@@ -399,16 +399,8 @@ pub fn main() !void {
         const work_elapsed = secondsElapsed(last_clock, getWallClock());
         if (work_elapsed < TARGET_SECONDS_PER_FRAME) {
             const sleep_s = TARGET_SECONDS_PER_FRAME - work_elapsed;
-            const sleep_ns: i64 = @intFromFloat(sleep_s * 1_000_000_000.0);
-            var req = c.struct_timespec{
-                .tv_sec = 0,
-                .tv_nsec = sleep_ns,
-            };
-            while (c.nanosleep(&req, &req) == -1) {
-                // Retry only on signal interruption; break on any other error
-                // (e.g. EINVAL from an invalid timespec) to avoid a busy-loop.
-                if (std.c._errno().* != @intFromEnum(std.posix.E.INTR)) break;
-            }
+            const sleep_ns: u64 = @intFromFloat(sleep_s * 1_000_000_000.0);
+            std.Thread.sleep(sleep_ns);
         }
         last_clock = getWallClock();
     }
