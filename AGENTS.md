@@ -39,7 +39,9 @@ usable/
 - Double-buffered Windows GDI backbuffer using 32-bit DIB sections
 - HTTP fetching via `std.http.Client`
 - Minimal HTML parsing for element/text nodes
-- Comment and doctype skipping in the parser
+- Comment and doctype skipping in the parser, including mixed-case doctypes
+- Quote-aware tag scanning for `>` inside quoted attribute values
+- Case-insensitive handling for HTML tag names used by parser/layout decisions
 - Void-element handling in the parser
 - Separate layout tree with block, inline, and anonymous boxes
 - Word-based text fragmentation and wrapping
@@ -49,7 +51,7 @@ usable/
 | Task | Location | Notes |
 |------|----------|-------|
 | Fetch and navigate | `src/app.zig` | `navigate()` resets the arena, fetches the URL, parses HTML, and triggers layout |
-| HTML parsing | `src/dom.zig` | Tree builder for elements/text, stores raw attribute slices only |
+| HTML parsing | `src/dom.zig` | Tree builder for elements/text, skips comments/doctypes, and stores raw attribute slices only |
 | Layout tree construction | `src/layout.zig` | `buildLayoutTree()` filters non-visual nodes and creates block/inline/anonymous boxes |
 | Text layout and measurement | `src/layout.zig` | `layout()` and `measureText()` perform word wrapping and fragment placement |
 | Shared state and geometry | `src/types.zig` | DOM nodes, layout boxes, app memory, colors, framebuffer |
@@ -68,11 +70,11 @@ usable/
 | `DOM` | struct | `src/dom.zig:4` | Parser state and DOM root holder |
 | `DOM.parse()` | fn | `src/dom.zig:15` | Minimal HTML parser |
 | `buildLayoutTree()` | fn | `src/layout.zig:6` | Converts DOM nodes into layout boxes |
-| `layout()` | fn | `src/layout.zig:213` | Computes layout box geometry and text fragments |
-| `measureText()` | fn | `src/layout.zig:346` | Measures text using FreeType glyph metrics |
+| `layout()` | fn | `src/layout.zig:219` | Computes layout box geometry and text fragments |
+| `measureText()` | fn | `src/layout.zig:359` | Measures text using FreeType glyph metrics |
 | `navigate()` | fn | `src/app.zig:51` | Fetches a page, parses it, and builds layout |
-| `updateAndRender()` | fn | `src/app.zig:177` | Initializes FreeType on first frame and renders current state |
-| `X11Backbuffer` | struct | `src/linux_platform.zig:108` | Linux double-buffered presentation layer |
+| `updateAndRender()` | fn | `src/app.zig:201` | Initializes FreeType on first frame and renders current state |
+| `X11Backbuffer` | struct | `src/linux_platform.zig:115` | Linux double-buffered presentation layer |
 
 ## BUILD / PLATFORM DETAILS
 - `build.zig` creates an executable named `usable`.
@@ -95,11 +97,13 @@ zig build test            # Run the configured test step for the current target
 zig build --help          # Show available steps/options
 ```
 
-## VERIFIED CURRENT STATE (2026-03-26)
+## VERIFIED CURRENT STATE (2026-04-11)
 - Native `zig build` succeeds on this Linux environment.
 - Native `zig build test` succeeds, but there are currently no Zig `test` blocks in the repo.
 - `zig build --help` exposes `install`, `run`, and `test` steps.
-- Cross-building for `x86_64-windows-gnu` succeeds.
+- The DOM parser skips HTML comments and doctypes, including mixed-case doctypes.
+- The DOM parser treats `>` inside quoted attribute values as part of the attribute, not the end of the tag.
+- HTML tag-name comparisons used for void elements and layout classification are ASCII case-insensitive.
 
 ## IMPORTANT NOTES
 - Linux and Windows both have verified buildable platform entrypoints.
@@ -113,6 +117,7 @@ zig build --help          # Show available steps/options
   - Windows: `C:\Windows\Fonts\arial.ttf`
 - Rendering is currently text-focused. Element boxes are traversed, but there is no CSS styling, box painting, image rendering, or JavaScript execution.
 - Parser attributes are stored as raw slices in `ElementNode.raw_attributes`; there is no parsed attribute model yet.
+- Regular tag scanning is quote-aware, and tag-name comparisons are ASCII case-insensitive, but the parser is still intentionally minimal and not HTML5-complete.
 - `layout.zig` drops whitespace-only text nodes and converts remaining text into per-word fragments for wrapping.
 - There are many debug `std.debug.print` calls throughout fetch, layout, and platform code.
 
