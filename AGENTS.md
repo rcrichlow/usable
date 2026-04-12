@@ -35,6 +35,10 @@ usable/
 ## CURRENT CAPABILITIES
 - Linux X11 window creation and event loop
 - Double-buffered Linux backbuffer using MIT-SHM when available, with `XPutImage` fallback
+- Async `XShmAttach` error detection via temporary X error handler; `shmdt` called on attach failure
+- `XSync` before buffer reuse/destroy to drain pending blits
+- Resize triggers backbuffer recreation and layout reflow to match new viewport width
+- Keycodes resolved via `XKeysymToKeycode` at startup (no hardcoded numeric values)
 - Windows Win32 window creation and message loop
 - Double-buffered Windows GDI backbuffer using 32-bit DIB sections
 - HTTP fetching via `std.http.Client`
@@ -45,7 +49,13 @@ usable/
 - Void-element handling in the parser
 - Separate layout tree with block, inline, and anonymous boxes
 - Word-based text fragmentation and wrapping
-- FreeType LCD text rendering into a BGRA8 software buffer
+- FreeType LCD, grayscale, and monochrome bitmap rendering into a BGRA8 software buffer
+- UTF-8-aware text iteration in `drawText` and `measureText`
+- FreeType init failure is recorded permanently; no retry on subsequent frames
+- Stale arena pointers (`dom_tree`, `layout_tree`, `response_body`, `current_url`, `error_message`) nulled immediately after `arena.reset()` on each navigation
+- URL copied to a stack buffer before `arena.reset()` to prevent use-after-free during navigate
+- `parseWords` propagates OOM errors instead of silently returning an empty slice
+- `paddingBox`, `borderBox`, `marginBox` correctly propagate x/y position
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
@@ -64,17 +74,18 @@ usable/
 |--------|------|----------|------|
 | `BrowserState` | enum | `src/types.zig:5` | Idle / Loading / Loaded / Error browser lifecycle |
 | `Node` | union | `src/types.zig:12` | DOM node union for element/text nodes |
-| `LayoutBox` | struct | `src/types.zig:71` | Layout tree node with dimensions, children, and optional text fragments |
-| `AppMemory` | struct | `src/types.zig:91` | Long-lived browser state, FreeType handles, arena, and storage slices |
-| `OffscreenBuffer` | struct | `src/types.zig:130` | Software framebuffer and FreeType bitmap blitter |
+| `LayoutBox` | struct | `src/types.zig:79` | Layout tree node with dimensions, children, and optional text fragments |
+| `AppMemory` | struct | `src/types.zig:99` | Long-lived browser state, FreeType handles, arena, and storage slices |
+| `OffscreenBuffer` | struct | `src/types.zig:139` | Software framebuffer and FreeType bitmap blitter |
 | `DOM` | struct | `src/dom.zig:4` | Parser state and DOM root holder |
 | `DOM.parse()` | fn | `src/dom.zig:15` | Minimal HTML parser |
 | `buildLayoutTree()` | fn | `src/layout.zig:6` | Converts DOM nodes into layout boxes |
-| `layout()` | fn | `src/layout.zig:219` | Computes layout box geometry and text fragments |
-| `measureText()` | fn | `src/layout.zig:359` | Measures text using FreeType glyph metrics |
-| `navigate()` | fn | `src/app.zig:51` | Fetches a page, parses it, and builds layout |
-| `updateAndRender()` | fn | `src/app.zig:201` | Initializes FreeType on first frame and renders current state |
-| `X11Backbuffer` | struct | `src/linux_platform.zig:115` | Linux double-buffered presentation layer |
+| `layout()` | fn | `src/layout.zig:208` | Computes layout box geometry and text fragments |
+| `measureText()` | fn | `src/layout.zig:353` | Measures text using FreeType glyph metrics |
+| `navigate()` | fn | `src/app.zig:54` | Fetches a page, parses it, and builds layout |
+| `updateAndRender()` | fn | `src/app.zig:221` | Initializes FreeType on first frame and renders current state |
+| `X11Backbuffer` | struct | `src/linux_platform.zig:142` | Linux double-buffered presentation layer |
+| `ShmBuffer` | struct | `src/linux_platform.zig:39` | Single SHM-backed or malloc-backed X11 pixel buffer |
 
 ## BUILD / PLATFORM DETAILS
 - `build.zig` creates an executable named `usable`.
@@ -129,6 +140,9 @@ zig build --help          # Show available steps/options
 - Layout uses `Dimensions` plus `margin` / `padding` / `border` helpers in `src/types.zig`.
 - Mixed block/inline children under a block container are normalized with anonymous boxes.
 - Non-visual elements skipped during layout include: `head`, `style`, `script`, `title`, `meta`, and `link`.
+- `AppMemory` fields `dom_tree` and `layout_tree` are optional (`?`) and must be initialized to `null` in the platform layer; never `undefined`.
+- `AppMemory.ft_init_failed` is set permanently on the first FreeType init failure and suppresses all retry attempts.
+- All stale arena pointers in `AppMemory` are nulled immediately after `arena.reset()` before any new allocation.
 
 ## ANTI-PATTERNS / LIMITS (THIS PROJECT)
 - Do not assume Linux and Windows have identical presentation internals; Linux uses X11/XShm paths while Windows uses GDI DIB blits.
