@@ -37,19 +37,27 @@ pub const Dimensions = struct {
     pub fn paddingBox(self: Dimensions) Rect {
         const height = self.padding.top + self.padding.bottom + self.content.height;
         const width = self.padding.right + self.padding.left + self.content.width;
-        return .{ .height = height, .width = width, .x = 0, .y = 0 };
+        const x = self.content.x - self.padding.left;
+        const y = self.content.y - self.padding.top;
+        return .{ .height = height, .width = width, .x = x, .y = y };
     }
 
     pub fn borderBox(self: Dimensions) Rect {
-        const height = self.border.top + self.border.bottom + self.paddingBox().height;
-        const width = self.border.right + self.border.left + self.paddingBox().width;
-        return .{ .height = height, .width = width, .x = 0, .y = 0 };
+        const pb = self.paddingBox();
+        const height = self.border.top + self.border.bottom + pb.height;
+        const width = self.border.right + self.border.left + pb.width;
+        const x = pb.x - self.border.left;
+        const y = pb.y - self.border.top;
+        return .{ .height = height, .width = width, .x = x, .y = y };
     }
 
     pub fn marginBox(self: Dimensions) Rect {
-        const height = self.margin.top + self.margin.bottom + self.borderBox().height;
-        const width = self.margin.right + self.margin.left + self.borderBox().width;
-        return .{ .height = height, .width = width, .x = 0, .y = 0 };
+        const bb = self.borderBox();
+        const height = self.margin.top + self.margin.bottom + bb.height;
+        const width = self.margin.right + self.margin.left + bb.width;
+        const x = bb.x - self.margin.left;
+        const y = bb.y - self.margin.top;
+        return .{ .height = height, .width = width, .x = x, .y = y };
     }
 };
 
@@ -60,8 +68,8 @@ pub const BoxType = enum {
 };
 
 pub const TextFragment = struct {
-    content: []const u8,  // slice into original text (no copy)
-    x: f32,              // position relative to containing block
+    content: []const u8, // slice into original text (no copy)
+    x: f32, // position relative to containing block
     y: f32,
     width: f32,
     ascent: f32,
@@ -92,6 +100,7 @@ pub const AppMemory = struct {
     ft_library: ft.FT_Library,
     ft_face: ft.FT_Face,
     ft_is_initialized: bool,
+    ft_init_failed: bool, // set permanently on first init failure; suppresses retry
 
     // Browser state
     browser_state: BrowserState,
@@ -146,7 +155,9 @@ pub const OffscreenBuffer = struct {
         }
     }
 
-    /// Draw a FreeType bitmap into the buffer
+    /// Draw a FreeType bitmap into the buffer.
+    /// Supports LCD (FT_PIXEL_MODE_LCD), grayscale (FT_PIXEL_MODE_GRAY), and
+    /// mono (FT_PIXEL_MODE_MONO) bitmaps. Any other pixel mode is ignored.
     pub fn drawFTBitmap(
         self: *OffscreenBuffer,
         bitmap: *const ft.FT_Bitmap,
@@ -154,39 +165,95 @@ pub const OffscreenBuffer = struct {
         y: i32,
         color: Color,
     ) void {
-        const bm_width: i32 = @intCast(bitmap.width / 3);
+        const bm_buffer: [*]const u8 = bitmap.buffer orelse return;
         const bm_rows: i32 = @intCast(bitmap.rows);
         const bm_pitch: i32 = bitmap.pitch;
 
-        const bm_buffer: [*]const u8 = bitmap.buffer orelse return;
+        switch (bitmap.pixel_mode) {
+            ft.FT_PIXEL_MODE_LCD => {
+                // Horizontal subpixel rendering: each pixel is 3 bytes (R,G,B coverage).
+                const bm_width: i32 = @intCast(bitmap.width / 3);
 
-        const start_x: i32 = @max(0, -x);
-        const start_y: i32 = @max(0, -y);
-        const end_x: i32 = @min(bm_width, self.width - x);
-        const end_y: i32 = @min(bm_rows, self.height - y);
+                const start_x: i32 = @max(0, -x);
+                const start_y: i32 = @max(0, -y);
+                const end_x: i32 = @min(bm_width, self.width - x);
+                const end_y: i32 = @min(bm_rows, self.height - y);
+                if (start_x >= end_x or start_y >= end_y) return;
 
-        if (start_x >= end_x or start_y >= end_y) return;
+                for (@as(usize, @intCast(start_y))..@as(usize, @intCast(end_y))) |bm_row| {
+                    const row_i: i32 = @intCast(bm_row);
+                    const dest_y = y + row_i;
+                    const src_row_offset: i32 = if (bm_pitch > 0) row_i * bm_pitch else (bm_rows - 1 - row_i) * (-bm_pitch);
+                    const src_row: [*]const u8 = bm_buffer + @as(usize, @intCast(src_row_offset));
+                    const dest_row: [*]Color = @ptrCast(@alignCast(self.memory + @as(usize, @intCast(dest_y * self.pitch))));
 
-        for (@as(usize, @intCast(start_y))..@as(usize, @intCast(end_y))) |bm_row| {
-            const row_i: i32 = @intCast(bm_row);
-            const dest_y = y + row_i;
+                    for (@as(usize, @intCast(start_x))..@as(usize, @intCast(end_x))) |bm_col| {
+                        const dest_x = x + @as(i32, @intCast(bm_col));
+                        const r_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 0])) / 255.0;
+                        const g_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 1])) / 255.0;
+                        const b_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 2])) / 255.0;
+                        const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
+                        dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * r_coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - r_coverage));
+                        dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * g_coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - g_coverage));
+                        dest_pixel.b = @intFromFloat(@as(f32, @floatFromInt(color.b)) * b_coverage + @as(f32, @floatFromInt(dest_pixel.b)) * (1.0 - b_coverage));
+                    }
+                }
+            },
+            ft.FT_PIXEL_MODE_GRAY => {
+                // Single-channel grayscale: one byte per pixel.
+                const bm_width: i32 = @intCast(bitmap.width);
 
-            const src_row_offset: i32 = if (bm_pitch > 0) row_i * bm_pitch else (bm_rows - 1 - row_i) * bm_pitch;
-            const src_row: [*]const u8 = bm_buffer + @as(usize, @intCast(src_row_offset));
+                const start_x: i32 = @max(0, -x);
+                const start_y: i32 = @max(0, -y);
+                const end_x: i32 = @min(bm_width, self.width - x);
+                const end_y: i32 = @min(bm_rows, self.height - y);
+                if (start_x >= end_x or start_y >= end_y) return;
 
-            const dest_row: [*]Color = @ptrCast(@alignCast(self.memory + @as(usize, @intCast(dest_y * self.pitch))));
+                for (@as(usize, @intCast(start_y))..@as(usize, @intCast(end_y))) |bm_row| {
+                    const row_i: i32 = @intCast(bm_row);
+                    const dest_y = y + row_i;
+                    const src_row_offset: i32 = if (bm_pitch > 0) row_i * bm_pitch else (bm_rows - 1 - row_i) * (-bm_pitch);
+                    const src_row: [*]const u8 = bm_buffer + @as(usize, @intCast(src_row_offset));
+                    const dest_row: [*]Color = @ptrCast(@alignCast(self.memory + @as(usize, @intCast(dest_y * self.pitch))));
 
-            for (@as(usize, @intCast(start_x))..@as(usize, @intCast(end_x))) |bm_col| {
-                const dest_x = x + @as(i32, @intCast(bm_col));
-                const r_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 0])) / 255.0;
-                const g_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 1])) / 255.0;
-                const b_coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col * 3 + 2])) / 255.0;
+                    for (@as(usize, @intCast(start_x))..@as(usize, @intCast(end_x))) |bm_col| {
+                        const dest_x = x + @as(i32, @intCast(bm_col));
+                        const coverage: f32 = @as(f32, @floatFromInt(src_row[bm_col])) / 255.0;
+                        const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
+                        dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - coverage));
+                        dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - coverage));
+                        dest_pixel.b = @intFromFloat(@as(f32, @floatFromInt(color.b)) * coverage + @as(f32, @floatFromInt(dest_pixel.b)) * (1.0 - coverage));
+                    }
+                }
+            },
+            ft.FT_PIXEL_MODE_MONO => {
+                // 1-bit monochrome: 8 pixels per byte, MSB first.
+                const bm_width: i32 = @intCast(bitmap.width);
 
-                const dest_pixel: *Color = &dest_row[@as(usize, @intCast(dest_x))];
-                dest_pixel.r = @intFromFloat(@as(f32, @floatFromInt(color.r)) * r_coverage + @as(f32, @floatFromInt(dest_pixel.r)) * (1.0 - r_coverage));
-                dest_pixel.g = @intFromFloat(@as(f32, @floatFromInt(color.g)) * g_coverage + @as(f32, @floatFromInt(dest_pixel.g)) * (1.0 - g_coverage));
-                dest_pixel.b = @intFromFloat(@as(f32, @floatFromInt(color.b)) * b_coverage + @as(f32, @floatFromInt(dest_pixel.b)) * (1.0 - b_coverage));
-            }
+                const start_x: i32 = @max(0, -x);
+                const start_y: i32 = @max(0, -y);
+                const end_x: i32 = @min(bm_width, self.width - x);
+                const end_y: i32 = @min(bm_rows, self.height - y);
+                if (start_x >= end_x or start_y >= end_y) return;
+
+                for (@as(usize, @intCast(start_y))..@as(usize, @intCast(end_y))) |bm_row| {
+                    const row_i: i32 = @intCast(bm_row);
+                    const dest_y = y + row_i;
+                    const src_row_offset: i32 = if (bm_pitch > 0) row_i * bm_pitch else (bm_rows - 1 - row_i) * (-bm_pitch);
+                    const src_row: [*]const u8 = bm_buffer + @as(usize, @intCast(src_row_offset));
+                    const dest_row: [*]Color = @ptrCast(@alignCast(self.memory + @as(usize, @intCast(dest_y * self.pitch))));
+
+                    for (@as(usize, @intCast(start_x))..@as(usize, @intCast(end_x))) |bm_col| {
+                        const dest_x = x + @as(i32, @intCast(bm_col));
+                        const byte = src_row[bm_col / 8];
+                        const bit: u3 = @intCast(7 - (bm_col % 8));
+                        if ((byte >> bit) & 1 == 1) {
+                            dest_row[@as(usize, @intCast(dest_x))] = color;
+                        }
+                    }
+                }
+            },
+            else => {}, // unsupported pixel mode — skip silently
         }
     }
 };

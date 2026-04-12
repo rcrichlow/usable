@@ -16,44 +16,62 @@ pub fn init(memory: *types.AppMemory) !void {
         return error.FreeTypeInitFailed;
     }
 
-    memory.ft_library = library;
-
     const font_path = switch (@import("builtin").target.os.tag) {
         .windows => "C:\\Windows\\Fonts\\arial.ttf",
         else => "/usr/share/fonts/noto/NotoSans-Regular.ttf",
     };
     std.debug.print("Loading font: {s}\n", .{font_path});
 
-    if (ft.FT_New_Face(memory.ft_library.?, font_path, 0, &face) != 0) {
+    if (ft.FT_New_Face(library, font_path, 0, &face) != 0) {
         std.debug.print("Failed to load font ft_face\n", .{});
+        _ = ft.FT_Done_FreeType(library);
         return error.FontLoadFailed;
     }
 
-    memory.ft_face = face;
-
-    if (ft.FT_Library_SetLcdFilter(memory.ft_library.?, ft.FT_LCD_FILTER_DEFAULT) != 0) {
+    if (ft.FT_Library_SetLcdFilter(library, ft.FT_LCD_FILTER_DEFAULT) != 0) {
         std.debug.print("Failed to set LCD filter\n", .{});
+        _ = ft.FT_Done_Face(face);
+        _ = ft.FT_Done_FreeType(library);
         return error.LcdFilterFailed;
     }
 
-    if (ft.FT_Set_Char_Size(memory.ft_face.?, 0, 16 * 64, 0, 0) != 0) {
+    if (ft.FT_Set_Char_Size(face, 0, 16 * 64, 0, 0) != 0) {
         std.debug.print("Failed to set char size\n", .{});
+        _ = ft.FT_Done_Face(face);
+        _ = ft.FT_Done_FreeType(library);
         return error.FontSizeFailed;
     }
 
-    std.debug.print("family name: {s}\n", .{memory.ft_face.?.*.family_name});
+    std.debug.print("family name: {s}\n", .{face.*.family_name});
 
+    memory.ft_library = library;
+    memory.ft_face = face;
     memory.ft_is_initialized = true;
 }
 
 /// Start navigating to a URL. Sets state to Loading and begins the fetch.
 /// The actual fetch happens synchronously for now - will make async later.
 pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: []const u8) void {
-    // Reset arena to free all previous allocations
-    _ = memory.arena.reset(.retain_capacity);
+    // Copy the url onto the stack before resetting the arena, so that a caller
+    // passing memory.current_url (which is arena-backed) doesn't get a dangling
+    // pointer after the reset.
+    var url_buf: [4096]u8 = undefined;
+    const safe_url = if (url.len <= url_buf.len) blk: {
+        @memcpy(url_buf[0..url.len], url);
+        break :blk url_buf[0..url.len];
+    } else url; // url is too long to stack-copy; caller must ensure it's not arena-backed
 
-    std.debug.print("navigating to: {s}\n", .{url});
-    const url_copy = memory.arena.allocator().dupe(u8, url) catch {
+    // Reset arena to free all previous allocations; stale pointers in AppMemory
+    // fields are overwritten below before they can be used.
+    _ = memory.arena.reset(.retain_capacity);
+    memory.dom_tree = null;
+    memory.layout_tree = null;
+    memory.response_body = &.{};
+    memory.current_url = &.{};
+    memory.error_message = &.{};
+
+    std.debug.print("navigating to: {s}\n", .{safe_url});
+    const url_copy = memory.arena.allocator().dupe(u8, safe_url) catch {
         memory.browser_state = .Error;
         memory.error_message = memory.arena.allocator().dupe(u8, "Out of memory") catch &.{};
         return;
@@ -63,7 +81,7 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     memory.browser_state = .Loading;
     memory.error_message = &.{};
 
-    const response_body = fetchUrl(&memory.arena, url) catch |err| {
+    const response_body = fetchUrl(&memory.arena, safe_url) catch |err| {
         memory.browser_state = .Error;
         memory.error_message = memory.arena.allocator().dupe(u8, "Failed to fetch URL") catch &.{};
         std.debug.print("Fetch error: {any}\n", .{err});
@@ -122,14 +140,14 @@ fn paint(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, box: *types.L
                     //const x = box.dimensions.content.x;
                     //const y = box.dimensions.content.y;
                     // trim text before drawing to avoid rendering whitespace-only text nodes
-                    // TODO: ideally we would trim the text during layout and not create boxes for 
+                    // TODO: ideally we would trim the text during layout and not create boxes for
                     // whitespace-only text nodes at all, but this is a quick fix for now - rcrichlow - 3/19/26
                     //drawText(memory, buffer, std.mem.trim(u8, tx.content, " \t\n\r"), @intFromFloat(x), @intFromFloat(y));
 
-                    // not going to trim here for now since we're going to normalize whitespace during 
+                    // not going to trim here for now since we're going to normalize whitespace during
                     // layout and not create boxes for whitespace-only text nodes
                     //drawText(memory, buffer, tx.content, @intFromFloat(x), @intFromFloat(y));
-                    
+
                     if (box.fragments) |fragments| {
                         for (fragments.items) |fragment| {
                             drawText(memory, buffer, fragment.content, @intFromFloat(fragment.x), @intFromFloat(fragment.y));
@@ -154,8 +172,9 @@ fn drawText(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, text: []co
     const ascender: i32 = @intCast(face.*.size.*.metrics.ascender >> 6);
     var draw_x = x;
     const baseline_y = y + ascender;
-    for (text) |char| {
-        const char_index = ft.FT_Get_Char_Index(memory.ft_face.?, char);
+    var iter = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (iter.nextCodepoint()) |codepoint| {
+        const char_index = ft.FT_Get_Char_Index(memory.ft_face.?, codepoint);
         if (ft.FT_Load_Glyph(memory.ft_face.?, char_index, ft.FT_LOAD_DEFAULT) != 0) {
             continue;
         }
@@ -165,7 +184,8 @@ fn drawText(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, text: []co
         }
 
         buffer.drawFTBitmap(&slot.*.bitmap, draw_x + slot.*.bitmap_left, baseline_y - slot.*.bitmap_top, memory.text_color);
-        draw_x += @intCast(slot.*.advance.x >> 6);
+        const adv: i32 = @intCast(slot.*.advance.x >> 6);
+        if (adv > 0) draw_x += adv;
     }
 }
 
@@ -199,14 +219,17 @@ fn render(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
 }
 
 pub fn updateAndRender(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
-    if (memory.ft_is_initialized == false) {
-        _ = init(memory) catch |err| {
+    if (!memory.ft_is_initialized and !memory.ft_init_failed) {
+        init(memory) catch |err| {
             std.debug.print("FreeType initialization error: {any}\n", .{err});
+            memory.ft_init_failed = true;
             return;
         };
 
         memory.browser_state = .Idle;
     }
+
+    if (memory.ft_init_failed) return;
 
     render(memory, buffer);
 }
