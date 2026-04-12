@@ -22,22 +22,47 @@ pub const DOM = struct {
             if (c == '<') {
                 var tag_start = i + 1;
                 var is_end_tag = false;
-                var is_comment_tag = false;
                 var is_doctype_tag = false;
 
                 if (tag_start < html.len and html[tag_start] == '/') {
                     tag_start += 1;
                     is_end_tag = true;
                 } else if (tag_start + 2 < html.len and html[tag_start] == '!' and html[tag_start + 1] == '-' and html[tag_start + 2] == '-') {
-                    is_comment_tag = true;
-                } else if (tag_start + 8 < html.len and html[tag_start] == '!' and 
-                          (std.mem.startsWith(u8, html[tag_start..], "!doctype") or std.mem.startsWith(u8, html[tag_start..], "!DOCTYPE"))) {
+                    var comment_closed = false;
+                    // skip comment content
+                    while (i < html.len) {
+                        i += 1;
+                        if (i + 2 < html.len and html[i] == '-' and html[i + 1] == '-' and html[i + 2] == '>') {
+                            i += 3; // skip '-->'
+                            comment_closed = true;
+                            break;
+                        }
+                    }
+
+                    if (comment_closed) continue; // skip to next iteration after closing comment
+                    if (i >= html.len) break; // EOF reached without closing comment
+                } else if (tag_start + 8 <= html.len and html[tag_start] == '!' and
+                    std.ascii.eqlIgnoreCase(html[tag_start .. tag_start + 8], "!doctype"))
+                {
                     is_doctype_tag = true;
                 }
 
-                while (i < html.len and html[i] != '>') {
+                var active_quote: ?u8 = null;
+                while (true) {
                     i += 1;
+                    if (i >= html.len) break;
+
+                    const current = html[i];
+                    if (active_quote) |quote| {
+                        if (current == quote) active_quote = null;
+                    } else if (current == '"' or current == '\'') {
+                        active_quote = current;
+                    } else if (current == '>') {
+                        break;
+                    }
                 }
+
+                if (i >= html.len) break;
 
                 var tag_end = i;
                 const is_self_closing = i > 0 and html[i - 1] == '/';
@@ -53,12 +78,12 @@ pub const DOM = struct {
                         if (parent_stack.items.len > 0) {
                             _ = parent_stack.pop();
                         }
-                    } else if (is_comment_tag or is_doctype_tag) {
+                    } else if (is_doctype_tag) {
                         // skip
                     } else {
                         const void_elements = [_][]const u8{ "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
                         const is_void = for (void_elements) |v| {
-                            if (std.mem.eql(u8, tag_name, v)) break true;
+                            if (std.ascii.eqlIgnoreCase(tag_name, v)) break true;
                         } else false;
 
                         const children = try std.ArrayList(types.Node).initCapacity(self.allocator, 4);

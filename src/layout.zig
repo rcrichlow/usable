@@ -6,8 +6,8 @@ const ft = c.ft;
 pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*types.LayoutBox {
     const non_visual = [_][]const u8{ "head", "style", "script", "title", "meta", "link" };
     const block = [_][]const u8{
-        "html","body","div", "p","h1","h2","h3","h4","h5","h6", "ul", "ol", "li", "section", "article",
-        "header","footer","main", "nav", "form", "table","blockquote", "pre", "hr",
+        "html",   "body",   "div",  "p",   "h1",   "h2",    "h3",         "h4",  "h5", "h6", "ul", "ol", "li", "section", "article",
+        "header", "footer", "main", "nav", "form", "table", "blockquote", "pre", "hr",
     };
 
     var layout_box: ?*types.LayoutBox = null;
@@ -22,7 +22,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
         .Element => |el| {
             // TODO: the way we name this, plus the negation below seems like it might be confusing. revisist. - rcrichlow - 3/2/26
             const is_non_visual = for (non_visual) |v| {
-                if (std.mem.eql(u8, el.tag_name, v)) break true;
+                if (std.ascii.eqlIgnoreCase(el.tag_name, v)) break true;
             } else false;
 
             if (is_non_visual) {
@@ -53,7 +53,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
             //std.debug.print("handling {s}\n", .{el.tag_name});
 
             layout_box.?.box_type = for (block) |b| {
-                if (std.mem.eql(u8, el.tag_name, b)) break .Block;
+                if (std.ascii.eqlIgnoreCase(el.tag_name, b)) break .Block;
             } else .Inline;
 
             std.debug.print("tag: {s}, box_type: {any}\n", .{ el.tag_name, layout_box.?.box_type });
@@ -178,7 +178,7 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
 }
 
 /// Tokenize text into words, ignoring whitespace and newlines.
-// TODO: there is probably a more efficient way to do this, eg. ranges or an actual 
+// TODO: there is probably a more efficient way to do this, eg. ranges or an actual
 // tokenzer or something - rcrichlow 3/23/26
 fn parseWords(text: []const u8, allocator: std.mem.Allocator) []const []const u8 {
     var words = std.ArrayList([]const u8).initCapacity(allocator, 4) catch |err| {
@@ -227,7 +227,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
             layout_box.dimensions.content.x = containing_block.content.x + layout_box.dimensions.margin.left +
                 layout_box.dimensions.padding.left + layout_box.dimensions.border.left;
             layout_box.dimensions.content.y = containing_block.content.y + y_offset + layout_box.dimensions.margin.top;
-                std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
+            std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
             var child_y_offset: f32 = 0;
             if (layout_box.children) |children| {
@@ -314,7 +314,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
                 var child_y_offset: f32 = 0;
-                if  (layout_box.children) |children| {
+                if (layout_box.children) |children| {
                     for (children.items) |child| {
                         layout(memory, child, layout_box.dimensions, child_y_offset);
                         child_y_offset += child.dimensions.marginBox().height;
@@ -333,7 +333,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
             layout_box.dimensions.content.x = containing_block.content.x + layout_box.dimensions.margin.left +
                 layout_box.dimensions.padding.left + layout_box.dimensions.border.left;
             layout_box.dimensions.content.y = containing_block.content.y + y_offset + layout_box.dimensions.margin.top;
-                std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
+            std.debug.print("layout_box content width: {d}\n", .{layout_box.dimensions.content.width});
 
             var child_y_offset: f32 = 0;
             if (layout_box.children) |children| {

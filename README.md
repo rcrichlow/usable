@@ -20,6 +20,9 @@ from source to handle font rendering.
 - Double-buffered Windows GDI software backbuffer using 32-bit DIB sections.
 - Synchronous HTTP fetching using the Zig standard library client.
 - Minimal HTML parsing into a DOM tree, including element and text nodes.
+- Comment and doctype skipping in the parser, including mixed-case doctypes.
+- Quote-aware tag scanning so `>` inside quoted attribute values does not prematurely end a tag.
+- Case-insensitive HTML tag handling for parser and layout decisions.
 - Basic layout-tree construction with block, inline, and anonymous boxes.
 - Basic word-wrapped text layout and FreeType-based software text rendering.
 
@@ -37,7 +40,7 @@ The platform layers are still a minimal starting point to get the browser render
 
 ### Core Browser Features
 
-- More complete HTML parsing and DOM support
+- More complete HTML parsing and DOM support beyond the current comment/doctype skipping and quote-aware tag scanning
 - Display more common tags and richer page structure
 - Form controls
 - CSS selector matching
