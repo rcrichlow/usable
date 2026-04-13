@@ -346,8 +346,10 @@ pub fn main() !void {
     const persistent = all_bytes[0..persistent_storage_size];
     const transient = all_bytes[persistent_storage_size..];
 
-    var fixed_buffer = std.heap.FixedBufferAllocator.init(persistent);
-    const arena = std.heap.ArenaAllocator.init(fixed_buffer.allocator());
+    var persistent_buffer = std.heap.FixedBufferAllocator.init(persistent);
+    var transient_buffer = std.heap.FixedBufferAllocator.init(transient);
+    const persistent_arena = std.heap.ArenaAllocator.init(persistent_buffer.allocator());
+    const transient_arena = std.heap.ArenaAllocator.init(transient_buffer.allocator());
 
     var app_memory: types.AppMemory = .{
         .ft_library = undefined,
@@ -362,7 +364,8 @@ pub fn main() !void {
         .layout_tree = null,
         .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, // white
         .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
-        .arena = arena,
+        .persistent_arena = persistent_arena,
+        .transient_arena = transient_arena,
         .persistent_storage = persistent,
         .transient_storage = transient,
     };
@@ -414,16 +417,10 @@ pub fn main() !void {
                     buffer.width = backbuffer.width;
                     buffer.height = backbuffer.height;
 
-                    // Re-run layout so text wrapping reflects the new viewport (#18)
+                    // Rebuild layout from the existing DOM using the transient arena,
+                    // so resize reflow does not refetch or reparse the page.
                     if (app_memory.browser_state == .Loaded) {
-                        if (app_memory.layout_tree) |layout_tree| {
-                            const app_mod = @import("app.zig");
-                            _ = app_mod; // use the layout function directly
-                            var window_dimensions = std.mem.zeroes(types.Dimensions);
-                            window_dimensions.content.width = @floatFromInt(buffer.width);
-                            window_dimensions.content.height = @floatFromInt(buffer.height);
-                            @import("layout.zig").layout(&app_memory, layout_tree, window_dimensions, 40);
-                        }
+                        app.reflow(&app_memory, &buffer);
                     }
                 },
                 else => {},

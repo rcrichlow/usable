@@ -49,6 +49,45 @@ pub fn init(memory: *types.AppMemory) !void {
     memory.ft_is_initialized = true;
 }
 
+fn resetPersistentState(memory: *types.AppMemory) void {
+    _ = memory.persistent_arena.reset(.retain_capacity);
+    memory.dom_tree = null;
+    memory.response_body = &.{};
+    memory.current_url = &.{};
+    memory.error_message = &.{};
+}
+
+fn resetTransientState(memory: *types.AppMemory) void {
+    _ = memory.transient_arena.reset(.retain_capacity);
+    memory.layout_tree = null;
+}
+
+pub fn reflow(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
+    if (memory.dom_tree == null) {
+        memory.browser_state = .Error;
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Missing DOM tree") catch &.{};
+        return;
+    }
+
+    resetTransientState(memory);
+
+    memory.layout_tree = layout.buildLayoutTree(&memory.dom_tree.?, memory.transient_arena.allocator());
+    if (memory.layout_tree == null) {
+        memory.browser_state = .Error;
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Failed to build layout tree.") catch &.{};
+        std.debug.print("Failed to build layout tree.\n", .{});
+        return;
+    }
+
+    var window_dimensions = std.mem.zeroes(types.Dimensions);
+    window_dimensions.content.width = @floatFromInt(buffer.width);
+    window_dimensions.content.height = @floatFromInt(buffer.height);
+
+    std.debug.print("buffer width: {d}\n", .{buffer.width});
+    std.debug.print("window width: {d}\n", .{window_dimensions.content.width});
+    layout.layout(memory, memory.layout_tree.?, window_dimensions, 40);
+}
+
 /// Start navigating to a URL. Sets state to Loading and begins the fetch.
 /// The actual fetch happens synchronously for now - will make async later.
 pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: []const u8) void {
@@ -61,19 +100,14 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
         break :blk url_buf[0..url.len];
     } else url; // url is too long to stack-copy; caller must ensure it's not arena-backed
 
-    // Reset arena to free all previous allocations; stale pointers in AppMemory
-    // fields are overwritten below before they can be used.
-    _ = memory.arena.reset(.retain_capacity);
-    memory.dom_tree = null;
-    memory.layout_tree = null;
-    memory.response_body = &.{};
-    memory.current_url = &.{};
-    memory.error_message = &.{};
+    // Reset both page-lifetime and reflow-lifetime state before loading.
+    resetPersistentState(memory);
+    resetTransientState(memory);
 
     std.debug.print("navigating to: {s}\n", .{safe_url});
-    const url_copy = memory.arena.allocator().dupe(u8, safe_url) catch {
+    const url_copy = memory.persistent_arena.allocator().dupe(u8, safe_url) catch {
         memory.browser_state = .Error;
-        memory.error_message = memory.arena.allocator().dupe(u8, "Out of memory") catch &.{};
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Out of memory") catch &.{};
         return;
     };
 
@@ -81,18 +115,18 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     memory.browser_state = .Loading;
     memory.error_message = &.{};
 
-    const response_body = fetchUrl(&memory.arena, safe_url) catch |err| {
+    const response_body = fetchUrl(&memory.persistent_arena, safe_url) catch |err| {
         memory.browser_state = .Error;
-        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to fetch URL") catch &.{};
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Failed to fetch URL") catch &.{};
         std.debug.print("Fetch error: {any}\n", .{err});
         return;
     };
 
     memory.response_body = response_body;
-    var DOM = dom.DOM.init(memory.arena.allocator());
+    var DOM = dom.DOM.init(memory.persistent_arena.allocator());
     DOM.parse(response_body) catch |err| {
         memory.browser_state = .Error;
-        memory.error_message = memory.arena.allocator().dupe(u8, "Parse error") catch &.{};
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Parse error") catch &.{};
         std.debug.print("Parse error: {any}\n", .{err});
         return;
     };
@@ -101,29 +135,14 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     if (memory.dom_tree == null) {
         // TODO: should probably handle this a bit more gracefully, but it's better than a panic - rcrichlow - 3/25/26
         memory.browser_state = .Error;
-        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to build DOM tree.") catch &.{};
+        memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Failed to build DOM tree.") catch &.{};
         std.debug.print("Failed to build DOM tree.\n", .{});
         return;
     }
 
-    memory.layout_tree = layout.buildLayoutTree(&memory.dom_tree.?, memory.arena.allocator());
-    if (memory.layout_tree == null) {
-        // TODO: should probably handle this a bit more gracefully, but it's better than a panic - rcrichlow - 3/25/26
-        memory.browser_state = .Error;
-        memory.error_message = memory.arena.allocator().dupe(u8, "Failed to build layout tree.") catch &.{};
-        std.debug.print("Failed to build layout tree.\n", .{});
-        return;
-    }
+    reflow(memory, buffer);
+    if (memory.layout_tree == null) return;
 
-    // TODO: don't initialize like this. probably want to set up the main window differently - rcrichlow - 3/3/26
-    var window_dimensions = std.mem.zeroes(types.Dimensions);
-    window_dimensions.content.width = @floatFromInt(buffer.width);
-    window_dimensions.content.height = @floatFromInt(buffer.height);
-
-    std.debug.print("buffer width: {d}\n", .{buffer.width});
-    std.debug.print("window width: {d}\n", .{window_dimensions.content.width});
-    layout.layout(memory, memory.layout_tree.?, window_dimensions, 40);
-    //std.debug.print("layout_tree: {any}\n", .{memory.layout_tree});
     memory.browser_state = .Loaded;
 }
 

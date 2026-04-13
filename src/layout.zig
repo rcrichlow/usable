@@ -234,7 +234,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 layout_box.dimensions.content.y = containing_block.content.y;
 
                 const txt = layout_box.node.?.Text;
-                const words = parseWords(txt.content, memory.arena.allocator()) catch |err| {
+                const words = parseWords(txt.content, memory.transient_arena.allocator()) catch |err| {
                     std.debug.print("error parsing words (OOM): {any}\n", .{err});
                     layout_box.dimensions.content.height = 0;
                     layout_box.dimensions.content.width = 0;
@@ -246,7 +246,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                     return;
                 }
 
-                layout_box.fragments = std.ArrayList(types.TextFragment).initCapacity(memory.arena.allocator(), words.len) catch |err| {
+                layout_box.fragments = std.ArrayList(types.TextFragment).initCapacity(memory.transient_arena.allocator(), words.len) catch |err| {
                     std.debug.print("error allocating fragments: {any}\n", .{err});
                     return;
                 };
@@ -294,7 +294,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                     //std.debug.print("word: '{s}'\n", .{word});
                     //std.debug.print("fragment: '{any}'\n", .{fragment});
 
-                    layout_box.fragments.?.append(memory.arena.allocator(), fragment) catch |err| {
+                    layout_box.fragments.?.append(memory.transient_arena.allocator(), fragment) catch |err| {
                         std.debug.print("error adding fragment: {any}\n", .{err});
                     };
                 }

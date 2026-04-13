@@ -38,6 +38,7 @@ usable/
 - Async `XShmAttach` error detection via temporary X error handler; `shmdt` called on attach failure
 - `XSync` before buffer reuse/destroy to drain pending blits
 - Resize triggers backbuffer recreation and layout reflow to match new viewport width
+- Resize reflow rebuilds layout from the existing DOM without refetching or reparsing the page
 - Keycodes resolved via `XKeysymToKeycode` at startup (no hardcoded numeric values)
 - Windows Win32 window creation and message loop
 - Double-buffered Windows GDI backbuffer using 32-bit DIB sections
@@ -52,15 +53,16 @@ usable/
 - FreeType LCD, grayscale, and monochrome bitmap rendering into a BGRA8 software buffer
 - UTF-8-aware text iteration in `drawText` and `measureText`
 - FreeType init failure is recorded permanently; no retry on subsequent frames
-- Stale arena pointers (`dom_tree`, `layout_tree`, `response_body`, `current_url`, `error_message`) nulled immediately after `arena.reset()` on each navigation
-- URL copied to a stack buffer before `arena.reset()` to prevent use-after-free during navigate
+- Separate persistent and transient arenas for page data vs reflow data
+- Stale persistent/transient pointers (`dom_tree`, `layout_tree`, `response_body`, `current_url`, `error_message`) nulled immediately when their arena is reset
+- URL copied to a stack buffer before persistent reset to prevent use-after-free during navigate
 - `parseWords` propagates OOM errors instead of silently returning an empty slice
 - `paddingBox`, `borderBox`, `marginBox` correctly propagate x/y position
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Fetch and navigate | `src/app.zig` | `navigate()` resets the arena, fetches the URL, parses HTML, and triggers layout |
+| Fetch, navigate, and reflow | `src/app.zig` | `navigate()` resets both arenas and loads a page; `reflow()` resets only transient layout state and rebuilds layout from the existing DOM |
 | HTML parsing | `src/dom.zig` | Tree builder for elements/text, skips comments/doctypes, and stores raw attribute slices only |
 | Layout tree construction | `src/layout.zig` | `buildLayoutTree()` filters non-visual nodes and creates block/inline/anonymous boxes |
 | Text layout and measurement | `src/layout.zig` | `layout()` and `measureText()` perform word wrapping and fragment placement |
@@ -76,14 +78,15 @@ usable/
 | `Node` | union | `src/types.zig:12` | DOM node union for element/text nodes |
 | `LayoutBox` | struct | `src/types.zig:79` | Layout tree node with dimensions, children, and optional text fragments |
 | `AppMemory` | struct | `src/types.zig:99` | Long-lived browser state, FreeType handles, arena, and storage slices |
-| `OffscreenBuffer` | struct | `src/types.zig:139` | Software framebuffer and FreeType bitmap blitter |
+| `OffscreenBuffer` | struct | `src/types.zig:142` | Software framebuffer and FreeType bitmap blitter |
 | `DOM` | struct | `src/dom.zig:4` | Parser state and DOM root holder |
 | `DOM.parse()` | fn | `src/dom.zig:15` | Minimal HTML parser |
 | `buildLayoutTree()` | fn | `src/layout.zig:6` | Converts DOM nodes into layout boxes |
 | `layout()` | fn | `src/layout.zig:208` | Computes layout box geometry and text fragments |
 | `measureText()` | fn | `src/layout.zig:353` | Measures text using FreeType glyph metrics |
-| `navigate()` | fn | `src/app.zig:54` | Fetches a page, parses it, and builds layout |
-| `updateAndRender()` | fn | `src/app.zig:221` | Initializes FreeType on first frame and renders current state |
+| `reflow()` | fn | `src/app.zig:65` | Resets transient layout state and rebuilds layout from the existing DOM |
+| `navigate()` | fn | `src/app.zig:93` | Fetches a page into persistent storage, parses HTML, and triggers layout |
+| `updateAndRender()` | fn | `src/app.zig:240` | Initializes FreeType on first frame and renders current state |
 | `X11Backbuffer` | struct | `src/linux_platform.zig:142` | Linux double-buffered presentation layer |
 | `ShmBuffer` | struct | `src/linux_platform.zig:39` | Single SHM-backed or malloc-backed X11 pixel buffer |
 
@@ -133,8 +136,9 @@ zig build --help          # Show available steps/options
 - There are many debug `std.debug.print` calls throughout fetch, layout, and platform code.
 
 ## CONVENTIONS
-- Page-scoped content is allocated from `AppMemory.arena` and reset on each navigation.
-- DOM, layout tree, and fetched response body all live off the page arena.
+- Page-scoped content is split between `AppMemory.persistent_arena` and `AppMemory.transient_arena`.
+- DOM, fetched response body, current URL, and error strings live in the persistent arena.
+- Layout tree, text fragments, and layout scratch data live in the transient arena.
 - Rendering uses a BGRA8 software buffer, not GPU APIs.
 - Linux and Windows both allocate `32 MiB` persistent storage plus `64 MiB` transient storage in the platform layer.
 - Layout uses `Dimensions` plus `margin` / `padding` / `border` helpers in `src/types.zig`.
@@ -142,7 +146,8 @@ zig build --help          # Show available steps/options
 - Non-visual elements skipped during layout include: `head`, `style`, `script`, `title`, `meta`, and `link`.
 - `AppMemory` fields `dom_tree` and `layout_tree` are optional (`?`) and must be initialized to `null` in the platform layer; never `undefined`.
 - `AppMemory.ft_init_failed` is set permanently on the first FreeType init failure and suppresses all retry attempts.
-- All stale arena pointers in `AppMemory` are nulled immediately after `arena.reset()` before any new allocation.
+- `navigate()` resets both arenas before loading a new page; `reflow()` resets only the transient arena.
+- All stale persistent/transient pointers in `AppMemory` are nulled immediately after the relevant arena reset before any new allocation.
 
 ## ANTI-PATTERNS / LIMITS (THIS PROJECT)
 - Do not assume Linux and Windows have identical presentation internals; Linux uses X11/XShm paths while Windows uses GDI DIB blits.

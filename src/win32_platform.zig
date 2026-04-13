@@ -192,6 +192,11 @@ fn win32WndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) c
             var rect: c.RECT = undefined;
             if (c.GetClientRect(hwnd, &rect) != 0) {
                 g_backbuffer.resize(rect.right - rect.left, rect.bottom - rect.top);
+                if (g_backbuffer.isReady() and g_app_memory.browser_state == .Loaded) {
+                    var buffer = currentOffscreenBuffer();
+                    app.reflow(&g_app_memory, &buffer);
+                    requestPresent(hwnd);
+                }
             }
             return 0;
         },
@@ -278,13 +283,16 @@ pub fn main() !void {
     const persistent = all_bytes[0..persistent_storage_size];
     const transient = all_bytes[persistent_storage_size..];
 
-    var fixed_buffer = std.heap.FixedBufferAllocator.init(persistent);
-    const arena = std.heap.ArenaAllocator.init(fixed_buffer.allocator());
+    var persistent_buffer = std.heap.FixedBufferAllocator.init(persistent);
+    var transient_buffer = std.heap.FixedBufferAllocator.init(transient);
+    const persistent_arena = std.heap.ArenaAllocator.init(persistent_buffer.allocator());
+    const transient_arena = std.heap.ArenaAllocator.init(transient_buffer.allocator());
 
     g_app_memory = .{
         .ft_library = undefined,
         .ft_face = undefined,
         .ft_is_initialized = false,
+        .ft_init_failed = false,
         .browser_state = .Idle,
         .current_url = &.{},
         .response_body = &.{},
@@ -293,7 +301,8 @@ pub fn main() !void {
         .layout_tree = null,
         .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
         .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
-        .arena = arena,
+        .persistent_arena = persistent_arena,
+        .transient_arena = transient_arena,
         .persistent_storage = persistent,
         .transient_storage = transient,
     };

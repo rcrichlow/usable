@@ -104,9 +104,9 @@ pub const AppMemory = struct {
 
     // Browser state
     browser_state: BrowserState,
-    current_url: []u8,
-    response_body: []u8,
-    error_message: []u8,
+    current_url: []const u8,
+    response_body: []const u8,
+    error_message: []const u8,
     dom_tree: ?Node,
     layout_tree: ?*LayoutBox,
 
@@ -114,8 +114,11 @@ pub const AppMemory = struct {
     background_color: Color,
     text_color: Color,
 
-    // Arena allocator for page content
-    arena: std.heap.ArenaAllocator,
+    // Page-lifetime data (URL, response body, DOM, error strings)
+    persistent_arena: std.heap.ArenaAllocator,
+
+    // Reflow-lifetime data (layout tree, text fragments, scratch)
+    transient_arena: std.heap.ArenaAllocator,
 
     // a chunk of memory for things that should persist
     // across frames (e.g. page content, cached glyph bitmaps, etc)
