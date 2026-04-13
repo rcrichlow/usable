@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @cImport({
     @cInclude("X11/Xlib.h");
+    @cInclude("X11/keysym.h");
     @cInclude("sys/shm.h");
     @cInclude("X11/extensions/XShm.h");
     @cInclude("time.h");
@@ -19,6 +20,19 @@ fn xDestroyImage(img: *XImage) void {
     if (img.f.destroy_image) |destroy_fn| {
         _ = destroy_fn(img);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Temporary X error handler for SHM attach probe (issue #25)
+// ---------------------------------------------------------------------------
+var g_shm_attach_error: bool = false;
+
+fn shmAttachErrorHandler(
+    _: ?*c.Display,
+    _: [*c]c.XErrorEvent,
+) callconv(.c) c_int {
+    g_shm_attach_error = true;
+    return 0;
 }
 
 /// A single SHM-backed (or malloc-backed) pixel buffer.
@@ -52,15 +66,23 @@ const ShmBuffer = struct {
             const shm_id = c.shmget(c.IPC_PRIVATE, size, c.IPC_CREAT | 0o777);
             if (shm_id != -1) {
                 const shm_addr = c.shmat(shm_id, null, 0);
-                if (shm_addr != @as(*anyopaque, @ptrFromInt(@as(usize, std.math.maxInt(usize))))) {
+                const shmat_failed = shm_addr == @as(*anyopaque, @ptrFromInt(std.math.maxInt(usize)));
+                if (!shmat_failed) {
                     self.shm_info.shmid = shm_id;
                     self.shm_info.shmaddr = @ptrCast(shm_addr);
                     img.data = @ptrCast(shm_addr);
                     self.shm_info.readOnly = 0;
 
-                    if (c.XShmAttach(display, &self.shm_info) != 0) {
-                        _ = c.XSync(display, 0);
+                    // Install a temporary error handler to catch async XShmAttach
+                    // failures (#25). XShmAttach returning nonzero only means the
+                    // request was queued; the server error (if any) arrives later.
+                    g_shm_attach_error = false;
+                    const prev_handler = c.XSetErrorHandler(shmAttachErrorHandler);
+                    const attach_ok = c.XShmAttach(display, &self.shm_info) != 0;
+                    _ = c.XSync(display, 0); // flush & wait for any error event
+                    _ = c.XSetErrorHandler(prev_handler);
 
+                    if (attach_ok and !g_shm_attach_error) {
                         self.ximage = img;
                         self.memory = @ptrCast(shm_addr);
                         self.pitch = img.bytes_per_line;
@@ -70,6 +92,9 @@ const ShmBuffer = struct {
                         @memset(self.memory[0..size], 0xFF);
                         return;
                     }
+
+                    // XShmAttach failed — detach the shared memory before giving up (#27)
+                    _ = c.shmdt(shm_addr);
                 }
                 _ = c.shmctl(shm_id, c.IPC_RMID, null);
             }
@@ -103,6 +128,8 @@ const ShmBuffer = struct {
 
     fn destroy(self: *ShmBuffer, display: *c.Display) void {
         if (self.using_shm) {
+            // Drain any pending XShmPutImage blit before detaching (#26)
+            _ = c.XSync(display, 0);
             _ = c.XShmDetach(display, &self.shm_info);
             _ = c.shmdt(self.shm_info.shmaddr);
         }
@@ -220,6 +247,8 @@ const X11Backbuffer = struct {
         if (new_w == self.width and new_h == self.height) return;
         if (new_w <= 0 or new_h <= 0) return;
 
+        // Drain pending blits before destroying the old buffers (#26)
+        _ = c.XSync(self.display, 0);
         self.destroy();
         self.init(self.display, self.visual, self.depth, new_w, new_h);
     }
@@ -283,6 +312,11 @@ pub fn main() !void {
     const gc = c.XCreateGC(display, window, 0, null);
     defer _ = c.XFreeGC(display, gc);
 
+    // Resolve keysyms to keycodes at startup so we aren't relying on
+    // hardware-specific numeric values (#29).
+    const keycode_f5: c_uint = c.XKeysymToKeycode(display, c.XK_F5);
+    const keycode_escape: c_uint = c.XKeysymToKeycode(display, c.XK_Escape);
+
     // Get URL from command line args, fallback to example.com
     // Must duplicate the URL before args are freed to avoid use-after-free
     var initial_url: []const u8 = "http://example.com";
@@ -312,22 +346,26 @@ pub fn main() !void {
     const persistent = all_bytes[0..persistent_storage_size];
     const transient = all_bytes[persistent_storage_size..];
 
-    var fixed_buffer = std.heap.FixedBufferAllocator.init(persistent);
-    const arena = std.heap.ArenaAllocator.init(fixed_buffer.allocator());
+    var persistent_buffer = std.heap.FixedBufferAllocator.init(persistent);
+    var transient_buffer = std.heap.FixedBufferAllocator.init(transient);
+    const persistent_arena = std.heap.ArenaAllocator.init(persistent_buffer.allocator());
+    const transient_arena = std.heap.ArenaAllocator.init(transient_buffer.allocator());
 
     var app_memory: types.AppMemory = .{
         .ft_library = undefined,
         .ft_face = undefined,
         .ft_is_initialized = false,
+        .ft_init_failed = false,
         .browser_state = .Idle,
         .current_url = &.{},
         .response_body = &.{},
         .error_message = &.{},
-        .dom_tree = undefined,
-        .layout_tree = undefined,
+        .dom_tree = null,
+        .layout_tree = null,
         .background_color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, // white
         .text_color = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
-        .arena = arena,
+        .persistent_arena = persistent_arena,
+        .transient_arena = transient_arena,
         .persistent_storage = persistent,
         .transient_storage = transient,
     };
@@ -361,10 +399,10 @@ pub fn main() !void {
                 c.KeyPress => {
                     const keycode = event.xkey.keycode;
                     std.debug.print("Key pressed: {d}\n", .{keycode});
-                    if (keycode == 71) { // F5 key
+                    if (keycode == keycode_f5) {
                         app.navigate(&app_memory, &buffer, initial_url);
                     }
-                    if (keycode == 9) { // Escape key
+                    if (keycode == keycode_escape) {
                         running = false;
                     }
                 },
@@ -372,16 +410,18 @@ pub fn main() !void {
                     const width = event.xconfigure.width;
                     const height = event.xconfigure.height;
                     std.debug.print("Window resized: {d}x{d}\n", .{ width, height });
-                    //std.debug.print("prev buffer width: {d}\n", .{backbuffer.width});
-                    //std.debug.print("prev buffer height: {d}\n", .{backbuffer.height});
                     backbuffer.resize(width, height);
                     render = backbuffer.getRenderBuffer();
                     buffer.memory = render.memory;
                     buffer.pitch = render.pitch;
                     buffer.width = backbuffer.width;
                     buffer.height = backbuffer.height;
-                    //std.debug.print("new buffer width: {d}\n", .{backbuffer.width});
-                    //std.debug.print("new buffer height: {d}\n", .{backbuffer.height});
+
+                    // Rebuild layout from the existing DOM using the transient arena,
+                    // so resize reflow does not refetch or reparse the page.
+                    if (app_memory.browser_state == .Loaded) {
+                        app.reflow(&app_memory, &buffer);
+                    }
                 },
                 else => {},
             }

@@ -16,6 +16,11 @@ from source to handle font rendering.
 
 - Linux X11 window creation and event handling.
 - Double-buffered Linux software backbuffer with MIT-SHM when available and `XPutImage` fallback.
+- Async `XShmAttach` error detection; shared memory detached correctly on attach failure.
+- `XSync` before buffer reuse or destroy to drain pending blits.
+- Window resize triggers backbuffer recreation and layout reflow to match the new viewport width.
+- Resize reflow rebuilds layout from the existing DOM without refetching or reparsing the page.
+- Keycodes resolved at startup via `XKeysymToKeycode` rather than hardcoded numeric values.
 - Windows Win32 window creation and event handling.
 - Double-buffered Windows GDI software backbuffer using 32-bit DIB sections.
 - Synchronous HTTP fetching using the Zig standard library client.
@@ -24,11 +29,16 @@ from source to handle font rendering.
 - Quote-aware tag scanning so `>` inside quoted attribute values does not prematurely end a tag.
 - Case-insensitive HTML tag handling for parser and layout decisions.
 - Basic layout-tree construction with block, inline, and anonymous boxes.
-- Basic word-wrapped text layout and FreeType-based software text rendering.
+- Word-wrapped text layout with UTF-8-aware measurement.
+- FreeType-based software text rendering supporting LCD subpixel, grayscale, and monochrome bitmaps.
+- FreeType init failure recorded permanently; no retry on subsequent frames.
+- App memory is split into persistent page data and transient layout data, so resize reflow can reset only layout allocations.
+- Stale persistent/transient pointers are nulled immediately on reset to prevent use-after-free.
+- `paddingBox`, `borderBox`, and `marginBox` geometry helpers correctly propagate position.
 
 ## Platform Layers
 
-The platform layers are still a minimal starting point to get the browser rendering. Linux/X11 and Windows/Win32 now both follow the same high-level lifecycle: each platform allocates `AppMemory`, owns a software backbuffer, continuously renders through `app.updateAndRender()`, and uses `F5`/`Escape` for reload/exit behavior. They still differ in presentation details (`XShm`/`XPutImage` on Linux vs GDI DIB blits on Windows). Both platform layers will likely need significant revision as the browser architecture evolves, particularly around:
+The platform layers are still a minimal starting point to get the browser rendering. Linux/X11 and Windows/Win32 now both follow the same high-level lifecycle: each platform allocates `AppMemory`, owns a software backbuffer, continuously renders through `app.updateAndRender()`, uses `F5`/`Escape` for reload/exit behavior, and triggers `app.reflow()` on resize for layout-only rebuilding. They still differ in presentation details (`XShm`/`XPutImage` on Linux vs GDI DIB blits on Windows). Both platform layers will likely need significant revision as the browser architecture evolves, particularly around:
 
 - Better separation between platform code and browser logic
 - Shared rendering abstractions

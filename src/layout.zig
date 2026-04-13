@@ -180,11 +180,8 @@ pub fn buildLayoutTree(node: *const types.Node, allocator: std.mem.Allocator) ?*
 /// Tokenize text into words, ignoring whitespace and newlines.
 // TODO: there is probably a more efficient way to do this, eg. ranges or an actual
 // tokenzer or something - rcrichlow 3/23/26
-fn parseWords(text: []const u8, allocator: std.mem.Allocator) []const []const u8 {
-    var words = std.ArrayList([]const u8).initCapacity(allocator, 4) catch |err| {
-        std.debug.print("error allocating words: {any}\n", .{err});
-        return &[_][]const u8{};
-    };
+fn parseWords(text: []const u8, allocator: std.mem.Allocator) ![]const []const u8 {
+    var words = try std.ArrayList([]const u8).initCapacity(allocator, 4);
 
     var i: usize = 0;
     while (i < text.len) {
@@ -201,19 +198,11 @@ fn parseWords(text: []const u8, allocator: std.mem.Allocator) []const []const u8
 
         const word_end = i;
         if (word_end > word_start) {
-            const word = text[word_start..word_end];
-
-            words.append(allocator, word) catch |err| {
-                std.debug.print("error adding word: {any}\n", .{err});
-                return &[_][]const u8{};
-            };
+            try words.append(allocator, text[word_start..word_end]);
         }
     }
 
-    return words.toOwnedSlice(allocator) catch |err| {
-        std.debug.print("error converting words to owned slice: {any}\n", .{err});
-        return &[_][]const u8{};
-    };
+    return words.toOwnedSlice(allocator);
 }
 
 pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing_block: types.Dimensions, y_offset: f32) void {
@@ -245,14 +234,19 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                 layout_box.dimensions.content.y = containing_block.content.y;
 
                 const txt = layout_box.node.?.Text;
-                const words = parseWords(txt.content, memory.arena.allocator());
+                const words = parseWords(txt.content, memory.transient_arena.allocator()) catch |err| {
+                    std.debug.print("error parsing words (OOM): {any}\n", .{err});
+                    layout_box.dimensions.content.height = 0;
+                    layout_box.dimensions.content.width = 0;
+                    return;
+                };
                 if (words.len == 0) {
                     layout_box.dimensions.content.height = 0;
                     layout_box.dimensions.content.width = 0;
                     return;
                 }
 
-                layout_box.fragments = std.ArrayList(types.TextFragment).initCapacity(memory.arena.allocator(), words.len) catch |err| {
+                layout_box.fragments = std.ArrayList(types.TextFragment).initCapacity(memory.transient_arena.allocator(), words.len) catch |err| {
                     std.debug.print("error allocating fragments: {any}\n", .{err});
                     return;
                 };
@@ -300,7 +294,7 @@ pub fn layout(memory: *types.AppMemory, layout_box: *types.LayoutBox, containing
                     //std.debug.print("word: '{s}'\n", .{word});
                     //std.debug.print("fragment: '{any}'\n", .{fragment});
 
-                    layout_box.fragments.?.append(memory.arena.allocator(), fragment) catch |err| {
+                    layout_box.fragments.?.append(memory.transient_arena.allocator(), fragment) catch |err| {
                         std.debug.print("error adding fragment: {any}\n", .{err});
                     };
                 }
@@ -358,31 +352,33 @@ const LineBox = struct {
 
 pub fn measureText(face: ft.FT_Face, text: []const u8) LineBox {
     const slot: ft.FT_GlyphSlot = face.*.glyph;
-    var width: u32 = 0;
-    var ascent: u32 = 0;
-    var descent: u32 = 0;
+    var width: i32 = 0;
+    var ascent: i32 = 0;
+    var descent: i32 = 0;
 
-    for (text) |char| {
-        const char_index = ft.FT_Get_Char_Index(face.?, char);
+    var iter = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    while (iter.nextCodepoint()) |codepoint| {
+        const char_index = ft.FT_Get_Char_Index(face.?, codepoint);
         if (ft.FT_Load_Glyph(face.?, char_index, ft.FT_LOAD_DEFAULT) != 0) {
             continue;
         }
 
-        width += @intCast(slot.*.advance.x >> 6);
+        const adv: i32 = @intCast(slot.*.advance.x >> 6);
+        if (adv > 0) width += adv;
 
-        const char_ascent: u32 = @intCast(slot.*.metrics.horiBearingY >> 6);
+        const char_ascent: i32 = @intCast(slot.*.metrics.horiBearingY >> 6);
         if (char_ascent > ascent) {
             ascent = char_ascent;
         }
 
-        const char_height: u32 = @intCast(slot.*.metrics.height >> 6);
-        const char_descent: u32 = char_height - char_ascent;
+        const char_height: i32 = @intCast(slot.*.metrics.height >> 6);
+        const char_descent: i32 = @max(0, char_height - char_ascent);
         if (char_descent > descent) {
             descent = char_descent;
         }
     }
 
-    const height: u32 = ascent + descent;
+    const height: i32 = ascent + descent;
 
     return .{
         .height = @floatFromInt(height),
