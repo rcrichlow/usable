@@ -90,7 +90,7 @@ pub fn reflow(memory: *types.AppMemory, buffer: *types.OffscreenBuffer) void {
 
 /// Start navigating to a URL. Sets state to Loading and begins the fetch.
 /// The actual fetch happens synchronously for now - will make async later.
-pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: []const u8) void {
+pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: []const u8, io: std.Io) void {
     // Copy the url onto the stack before resetting the arena, so that a caller
     // passing memory.current_url (which is arena-backed) doesn't get a dangling
     // pointer after the reset.
@@ -115,7 +115,7 @@ pub fn navigate(memory: *types.AppMemory, buffer: *types.OffscreenBuffer, url: [
     memory.browser_state = .Loading;
     memory.error_message = &.{};
 
-    const response_body = fetchUrl(&memory.persistent_arena, safe_url) catch |err| {
+    const response_body = fetchUrl(&memory.persistent_arena, safe_url, io) catch |err| {
         memory.browser_state = .Error;
         memory.error_message = memory.persistent_arena.allocator().dupe(u8, "Failed to fetch URL") catch &.{};
         std.debug.print("Fetch error: {any}\n", .{err});
@@ -253,9 +253,9 @@ pub fn updateAndRender(memory: *types.AppMemory, buffer: *types.OffscreenBuffer)
     render(memory, buffer);
 }
 
-fn fetchUrl(arena: *std.heap.ArenaAllocator, url: []const u8) ![]u8 {
+fn fetchUrl(arena: *std.heap.ArenaAllocator, url: []const u8, io: std.Io) ![]u8 {
     const http_allocator = std.heap.page_allocator;
-    var client = std.http.Client{ .allocator = http_allocator };
+    var client = std.http.Client{ .allocator = http_allocator, .io = io };
     defer client.deinit();
 
     const allocator = arena.allocator();
