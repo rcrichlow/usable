@@ -133,10 +133,10 @@ pub fn build(b: *std.Build) void {
     });
 
     // Link FreeType into the executable
-    exe.linkLibrary(freetype);
+    exe.root_module.linkLibrary(freetype);
 
     // Expose FreeType headers to our Zig code for @cImport
-    exe.addIncludePath(b.path("vendor/freetype2/include"));
+    exe.root_module.addIncludePath(b.path("vendor/freetype2/include"));
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default

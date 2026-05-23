@@ -13,6 +13,7 @@ var g_hwnd: c.HWND = null;
 var g_backbuffer: Backbuffer = .{};
 var g_running = true;
 var g_app_memory: types.AppMemory = undefined;
+var g_io: std.Io = undefined;
 var g_initial_url: []const u8 = "http://example.com";
 
 const DibBuffer = struct {
@@ -180,7 +181,7 @@ fn win32WndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) c
             const keycode: usize = @intCast(wparam);
             if (keycode == @as(usize, c.VK_F5) and g_backbuffer.isReady()) {
                 var buffer = currentOffscreenBuffer();
-                app.navigate(&g_app_memory, &buffer, g_initial_url);
+                app.navigate(&g_app_memory, &buffer, g_initial_url, g_io);
                 requestPresent(hwnd);
             }
             if (keycode == @as(usize, c.VK_ESCAPE)) {
@@ -206,17 +207,18 @@ fn win32WndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) c
     return c.DefWindowProcW(hwnd, msg, wparam, lparam);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("UsableBrowser");
     const window_title = std.unicode.utf8ToUtf16LeStringLiteral("Usable Browser");
 
-    if (std.process.argsAlloc(std.heap.page_allocator)) |args| {
-        if (args.len > 1) {
-            g_initial_url = std.heap.page_allocator.dupe(u8, args[1]) catch g_initial_url;
+    g_io = init.io;
+
+    {
+        var it = init.minimal.args.iterate();
+        _ = it.skip(); // skip argv[0] (program name)
+        if (it.next()) |url_arg| {
+            g_initial_url = std.heap.page_allocator.dupe(u8, url_arg) catch g_initial_url;
         }
-        std.process.argsFree(std.heap.page_allocator, args);
-    } else |_| {
-        std.debug.print("Failed to parse args, using default URL\n", .{});
     }
 
     var wc: c.WNDCLASSW = std.mem.zeroes(c.WNDCLASSW);

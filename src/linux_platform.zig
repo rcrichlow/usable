@@ -272,7 +272,7 @@ fn secondsElapsed(start: c.struct_timespec, end: c.struct_timespec) f32 {
     return @as(f32, @floatFromInt(sec)) + @as(f32, @floatFromInt(nsec)) / 1_000_000_000.0;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const display = c.XOpenDisplay(null) orelse {
         std.debug.print("Failed to open X display\n", .{});
         return;
@@ -318,18 +318,13 @@ pub fn main() !void {
     const keycode_escape: c_uint = c.XKeysymToKeycode(display, c.XK_Escape);
 
     // Get URL from command line args, fallback to example.com
-    // Must duplicate the URL before args are freed to avoid use-after-free
     var initial_url: []const u8 = "http://example.com";
-    if (std.process.argsAlloc(std.heap.page_allocator)) |args| {
-        // args are freed at the END of main, not here
-        if (args.len > 1) {
-            // Copy URL to our own allocation before anything else uses page_allocator
-            initial_url = std.heap.page_allocator.dupe(u8, args[1]) catch initial_url;
+    {
+        var it = init.minimal.args.iterate();
+        _ = it.skip(); // skip argv[0] (program name)
+        if (it.next()) |url_arg| {
+            initial_url = std.heap.page_allocator.dupe(u8, url_arg) catch initial_url;
         }
-        // Free args immediately since we've copied what we need
-        std.process.argsFree(std.heap.page_allocator, args);
-    } else |_| {
-        std.debug.print("Failed to parse args, using default URL\n", .{});
     }
 
     var backbuffer: X11Backbuffer = undefined;
@@ -400,7 +395,7 @@ pub fn main() !void {
                     const keycode = event.xkey.keycode;
                     std.debug.print("Key pressed: {d}\n", .{keycode});
                     if (keycode == keycode_f5) {
-                        app.navigate(&app_memory, &buffer, initial_url);
+                        app.navigate(&app_memory, &buffer, initial_url, init.io);
                     }
                     if (keycode == keycode_escape) {
                         running = false;
@@ -440,7 +435,7 @@ pub fn main() !void {
         if (work_elapsed < TARGET_SECONDS_PER_FRAME) {
             const sleep_s = TARGET_SECONDS_PER_FRAME - work_elapsed;
             const sleep_ns: u64 = @intFromFloat(sleep_s * 1_000_000_000.0);
-            std.Thread.sleep(sleep_ns);
+            init.io.sleep(.fromNanoseconds(sleep_ns), .awake) catch {};
         }
         last_clock = getWallClock();
     }
