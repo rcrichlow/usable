@@ -73,10 +73,70 @@ pub const DOM = struct {
                     const space_index = std.mem.indexOf(u8, full_tag, " ") orelse full_tag.len;
                     const tag_name = full_tag[0..space_index];
                     const raw_attributes = full_tag[space_index..];
+                    std.debug.print("Tag: {s}, Attributes: {s}\n", .{tag_name, raw_attributes});
+
+                    var parsed_attributes: ?std.StringHashMap([]const u8) = null;
+                    parsed_attributes = std.StringHashMap([]const u8).init(self.allocator);
+                    // use two pointers to parse attributes
+                    // set both to the start, then move the first pointer until it finds a space, 
+                    // then move the second pointer until it finds a non-space character, then add the attribute to the map, then repeat
+                    var attr_i: usize = 0;
+                    var attr_start: usize = 0;
+                    while (attr_i < raw_attributes.len) {
+                        @breakpoint();
+
+                        while (attr_i < raw_attributes.len and std.ascii.eqlIgnoreCase(raw_attributes[attr_i..attr_i + 1], " ")) {
+                            attr_i += 1;
+                        }
+                        if (attr_i >= raw_attributes.len) break;
+                        attr_start = attr_i;
+                        while (attr_i < raw_attributes.len and !std.ascii.eqlIgnoreCase(raw_attributes[attr_i..attr_i + 1], " ")) {
+                            attr_i += 1;
+                        }
+                        const attr_end = attr_i;
+                        const attr_name = raw_attributes[attr_start..attr_end];
+                        // split attribute by '=' if it exists, and store the name and value in the map
+                        // if the character after the '=' is a quote, then the value is everything 
+                        // until the next quote, otherwise it is everything until the next space
+                        const equal_index = std.mem.indexOf(u8, attr_name, "=") orelse attr_name.len;
+
+                        // test value: content="width=device-width, initial-scale=1"
+                        const name = attr_name[0..equal_index];
+                        var value: []const u8 = "";
+                        if (equal_index < attr_name.len) {
+                            const value_start = equal_index + 1;
+                            if (value_start < attr_name.len) {
+                                if (attr_name[value_start] == '"' or attr_name[value_start] == '\'') {
+                                    const quote_char = attr_name[value_start];
+                                    var value_end = value_start + 1;
+                                    while (value_end < attr_name.len and attr_name[value_end] != quote_char) {
+                                        value_end += 1;
+                                    }
+                                    value = attr_name[value_start + 1..value_end];
+                                } else {
+                                    var value_end = value_start;
+                                    while (value_end < attr_name.len and !std.ascii.eqlIgnoreCase(attr_name[value_end..value_end + 1], " ")) {
+                                        value_end += 1;
+                                    }
+                                    value = attr_name[value_start..value_end];
+                                }
+                            }
+                        }
+
+                        try parsed_attributes.?.put(name, value);
+                        std.debug.print("Parsed attribute: {s}:{s}\n", .{name, value});
+                    }
+
 
                     if (is_end_tag) {
                         if (parent_stack.items.len > 0) {
-                            _ = parent_stack.pop();
+                            // check the tag name matches the last opened tag
+                            const last_opened = parent_stack.items[parent_stack.items.len - 1];
+                            if (std.ascii.eqlIgnoreCase(last_opened.tag_name, tag_name)) {
+                                _ = parent_stack.pop();
+                            } else {
+                                // Mismatched closing tag, ignore or handle as needed
+                            }
                         }
                     } else if (is_doctype_tag) {
                         // skip
@@ -91,6 +151,7 @@ pub const DOM = struct {
                         el_ptr.* = types.ElementNode{
                             .tag_name = tag_name,
                             .raw_attributes = raw_attributes,
+                            .parsed_attributes = null,
                             .children = children,
                         };
 

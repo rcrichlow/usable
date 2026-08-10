@@ -87,6 +87,7 @@ pub const LayoutBox = struct {
 pub const ElementNode = struct {
     tag_name: []const u8,
     raw_attributes: []const u8,
+    parsed_attributes: ?std.ArrayList([]const u8),
     children: std.ArrayList(Node),
 };
 
